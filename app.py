@@ -391,8 +391,8 @@ def run_usa_housecall(csv_file):
 # TAB 3 — Plumbing
 # ══════════════════════════════════════════════
 
-# ⚠️ TODO: Replace with the actual Google Sheet name (or open by URL/ID instead)
-PLUMBING_REVIEWS_SHEET_NAME = "PLUMBING REVIEWS"  # ← CHANGE THIS to your actual sheet name
+# Plumbing reviews sheet — opened by ID for reliability
+PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
 
 # ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
@@ -444,6 +444,9 @@ def run_plumbing(xlsx_file):
     df["Invoice Number"] = df["Invoice Number"].astype(str).str.strip()
     df = df.fillna("")
 
+    # Drop rows with no Invoice Number (e.g. the summary/total row at the bottom)
+    df = df[df["Invoice Number"].ne("") & df["Invoice Number"].ne("nan")].copy()
+
     # Remove duplicate Invoice Numbers (keep first occurrence only)
     before_dedup = len(df)
     df = df.drop_duplicates(subset=["Invoice Number"], keep="first")
@@ -483,7 +486,7 @@ def run_plumbing(xlsx_file):
     # ── 6. Fetch review invoices from all 4 tabs ─
     status.write("📋 Loading plumbing review invoices…")
     try:
-        reviews_sheet = client.open(PLUMBING_REVIEWS_SHEET_NAME)
+        reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
 
         all_review_invoices = set()
         for tab_name, col_index in PLUMBING_REVIEW_TABS:
