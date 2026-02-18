@@ -112,7 +112,12 @@ def run_workflow_pros_crm(csv_file):
     # ── 3. Filter: Payment Amount > 0 ────────────
     df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
     df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
-    status.write(f"✅ Filtered to {len(df)} rows with Payment Amount > 0.")
+
+    # Remove duplicate Invoice IDs (keep first occurrence only)
+    before_dedup = len(df)
+    df = df.drop_duplicates(subset=["Invoice ID"], keep="first")
+    dupes_removed = before_dedup - len(df)
+    status.write(f"✅ Filtered to {len(df)} rows (Payment Amount > 0, {dupes_removed} duplicate invoices removed).")
     progress.progress(30)
 
     # ── 4. Auth Google Sheets ────────────────────
@@ -273,7 +278,12 @@ def run_usa_housecall(csv_file):
 
     final_df = df_clean[OUTPUT_COLS].copy()
     final_df["Invoice Number"] = final_df["Invoice Number"].astype(str).str.strip()
-    status.write(f"✅ Filtered to {len(final_df)} rows with Payment Amount > 0.")
+
+    # Remove duplicate Invoice Numbers (keep first occurrence only)
+    before_dedup = len(final_df)
+    final_df = final_df.drop_duplicates(subset=["Invoice Number"], keep="first")
+    dupes_removed = before_dedup - len(final_df)
+    status.write(f"✅ Filtered to {len(final_df)} rows (Payment Amount > 0, {dupes_removed} duplicate invoices removed).")
     progress.progress(30)
 
     # ── 4. Auth Google Sheets ────────────────────
@@ -382,21 +392,22 @@ def run_usa_housecall(csv_file):
 # ══════════════════════════════════════════════
 
 # ⚠️ TODO: Replace with the actual Google Sheet name (or open by URL/ID instead)
-PLUMBING_REVIEWS_SHEET_NAME = "Plumbing Review and Plans"  # ← CHANGE THIS to your actual sheet name
+PLUMBING_REVIEWS_SHEET_NAME = "PLUMBING REVIEWS"  # ← CHANGE THIS to your actual sheet name
 
 # ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
     "yuskov.y@workflow.com.ua",
-    "alina.tryncha@workflow.com.ua",
-    "oleksandr.leoshko@workflow.com.ua"
+    # "alina@workflow.com.ua",     ← uncomment & edit
+    # "someone@workflow.com.ua",   ← add more as needed
 ]
 
 # Review tabs inside the plumbing reviews sheet + which column has Invoice Number
 # Format: (tab_name, column_index)  — column 3 = column C
 PLUMBING_REVIEW_TABS = [
-    ("Alina", 1),       # column C
+    ("Alina", 3),       # column C
     ("Alex", 3),        # column C
-    ("Eugene", 2),      # column C
+    ("Eugene", 3),      # column C
+    ("Sold/Posted", 3), # column C
 ]
 
 
@@ -433,7 +444,18 @@ def run_plumbing(xlsx_file):
     df = df[REQUIRED_COLS].copy()
     df["Invoice Number"] = df["Invoice Number"].astype(str).str.strip()
     df = df.fillna("")
-    status.write(f"✅ Loaded {len(df)} rows.")
+
+    # Remove duplicate Invoice Numbers (keep first occurrence only)
+    before_dedup = len(df)
+    df = df.drop_duplicates(subset=["Invoice Number"], keep="first")
+    dupes_removed = before_dedup - len(df)
+
+    # Convert ALL values to plain strings — XLSX often contains datetime/numpy
+    # types that are not JSON-serializable and crash the Google Sheets API.
+    for col in df.columns:
+        df[col] = df[col].astype(str).replace("NaT", "").replace("nan", "")
+
+    status.write(f"✅ Loaded {len(df)} rows ({dupes_removed} duplicate invoices removed).")
     progress.progress(20)
 
     # ── 3. Auth Google Sheets ────────────────────
