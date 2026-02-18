@@ -496,7 +496,7 @@ def run_plumbing(xlsx_file):
     # ── 6. Fetch review invoices from all 4 tabs ─
     status.write("📋 Loading plumbing review invoices…")
     try:
-        reviews_sheet = client.open(PLUMBING_REVIEWS_SHEET_ID)
+        reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
 
         all_review_invoices = set()
         for tab_name, col_index in PLUMBING_REVIEW_TABS:
