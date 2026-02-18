@@ -392,12 +392,12 @@ def run_usa_housecall(csv_file):
 # ══════════════════════════════════════════════
 
 # ⚠️ TODO: Replace with the actual Google Sheet name (or open by URL/ID instead)
-PLUMBING_REVIEWS_SHEET_NAME = "PLUMBING REVIEWS"  # ← CHANGE THIS to your actual sheet name
+PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
 
 # ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
     "yuskov.y@workflow.com.ua",
-    "alina.tryncha@workflow.com.ua",
+    #"alina.tryncha@workflow.com.ua",
     "oleksandr.leoshko@workflow.com.ua",
 ]
 
