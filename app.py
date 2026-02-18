@@ -391,8 +391,8 @@ def run_usa_housecall(csv_file):
 # TAB 3 — Plumbing
 # ══════════════════════════════════════════════
 
-# Plumbing reviews sheet — opened by ID for reliability
-PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
+# ⚠️ TODO: Replace with the actual Google Sheet name (or open by URL/ID instead)
+PLUMBING_REVIEWS_SHEET_NAME = "PLUMBING REVIEWS"  # ← CHANGE THIS to your actual sheet name
 
 # ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
@@ -426,6 +426,12 @@ def run_plumbing(xlsx_file):
         "Completion Date", "Assigned Technicians",
     ]
 
+    # Columns to keep in the final output (drop Invoice Balance & Payment Method)
+    OUTPUT_COLS = [
+        "Payment Type", "Amount", "Invoice Number", "Invoice Total",
+        "Paid On", "Completion Date", "Assigned Technicians",
+    ]
+
     status = st.status("Running Plumbing report…", expanded=True)
     progress = st.progress(0)
 
@@ -440,12 +446,16 @@ def run_plumbing(xlsx_file):
         st.error(f"❌ Missing columns in XLSX: {missing}")
         return None
 
-    df = df[REQUIRED_COLS].copy()
-    df["Invoice Number"] = df["Invoice Number"].astype(str).str.strip()
-    df = df.fillna("")
+    df = df[OUTPUT_COLS].copy()
 
-    # Drop rows with no Invoice Number (e.g. the summary/total row at the bottom)
-    df = df[df["Invoice Number"].ne("") & df["Invoice Number"].ne("nan")].copy()
+    # Fix Invoice Number: remove trailing .0 (Excel reads integers as floats)
+    df["Invoice Number"] = (
+        df["Invoice Number"]
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+    )
+    df = df.fillna("")
 
     # Remove duplicate Invoice Numbers (keep first occurrence only)
     before_dedup = len(df)
@@ -486,7 +496,7 @@ def run_plumbing(xlsx_file):
     # ── 6. Fetch review invoices from all 4 tabs ─
     status.write("📋 Loading plumbing review invoices…")
     try:
-        reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
+        reviews_sheet = client.open(PLUMBING_REVIEWS_SHEET_NAME)
 
         all_review_invoices = set()
         for tab_name, col_index in PLUMBING_REVIEW_TABS:
@@ -522,8 +532,8 @@ def run_plumbing(xlsx_file):
 
     # ── 8. Color duplicates dark red ─────────────
     status.write("🎨 Applying formatting…")
-    num_cols = len(REQUIRED_COLS)
-    last_col = chr(ord("A") + num_cols - 1)  # I
+    num_cols = len(OUTPUT_COLS)
+    last_col = chr(ord("A") + num_cols - 1)  # G
 
     formats = []
     for row_idx in duplicate_row_indices:
