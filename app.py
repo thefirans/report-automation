@@ -216,7 +216,7 @@ def run_workflow_pros_crm(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify=False)
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -379,7 +379,7 @@ def run_usa_housecall(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify=False)
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -488,12 +488,9 @@ def run_plumbing(xlsx_file):
     worksheet = sh.get_worksheet(0)
     progress.progress(40)
 
-    # ── 5. Upload data ───────────────────────────
-    status.write("⬆️ Uploading data…")
-    worksheet.update([df.columns.tolist()] + df.values.tolist())
-    progress.progress(50)
+    # ── 5. Upload is deferred — first we need to reorder rows ──
 
-    # ── 6. Fetch review invoices from all 4 tabs ─
+    # ── 6. Fetch review invoices from all tabs ───
     status.write("📋 Loading plumbing review invoices…")
     try:
         reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
@@ -516,47 +513,66 @@ def run_plumbing(xlsx_file):
         st.error(f"❌ Could not read plumbing reviews sheet: {e}")
         return None
 
-    progress.progress(65)
+    progress.progress(55)
 
-    # ── 7. Find duplicate invoices ───────────────
-    status.write("🔍 Checking for duplicate invoices…")
-    duplicate_row_indices = []  # 1-based Google Sheet row numbers
+    # ── 7. Separate clean rows from duplicates, put dupes at the end ──
+    status.write("🔀 Reordering rows (duplicates → bottom)…")
+    clean_rows = []
+    duplicate_rows = []
 
-    for i, (_, row) in enumerate(df.iterrows()):
+    for _, row in df.iterrows():
         inv_num = str(row["Invoice Number"]).strip()
         if inv_num and inv_num in all_review_invoices:
-            duplicate_row_indices.append(i + 2)  # +2: row 1 = header, data starts row 2
+            duplicate_rows.append(row)
+        else:
+            clean_rows.append(row)
 
-    status.write(f"   Found {len(duplicate_row_indices)} duplicate invoice(s).")
+    ordered_df = pd.DataFrame(clean_rows + duplicate_rows)
+    if not ordered_df.empty:
+        ordered_df = ordered_df[OUTPUT_COLS]
+    else:
+        ordered_df = pd.DataFrame(columns=OUTPUT_COLS)
+    ordered_df = ordered_df.fillna("")
+
+    # Convert ALL values to plain strings for Google Sheets API
+    for col in ordered_df.columns:
+        ordered_df[col] = ordered_df[col].astype(str).replace("NaT", "").replace("nan", "")
+
+    status.write(f"   {len(clean_rows)} clean rows + {len(duplicate_rows)} duplicate(s).")
+    progress.progress(65)
+
+    # ── 8. Upload reordered data ─────────────────
+    status.write("⬆️ Uploading data…")
+    worksheet.update([ordered_df.columns.tolist()] + ordered_df.values.tolist())
     progress.progress(75)
 
-    # ── 8. Color duplicates dark red ─────────────
+    # ── 9. Color duplicate rows (now at the bottom) dark red ──
     status.write("🎨 Applying formatting…")
     num_cols = len(OUTPUT_COLS)
     last_col = chr(ord("A") + num_cols - 1)  # G
 
-    formats = []
-    for row_idx in duplicate_row_indices:
-        formats.append({
-            "range": f"A{row_idx}:{last_col}{row_idx}",
+    if duplicate_rows:
+        # Duplicates start after all clean rows + 1 header row
+        start_dupes = len(clean_rows) + 2  # +2: row 1 = header, data from row 2
+        end_dupes = start_dupes + len(duplicate_rows) - 1
+
+        worksheet.batch_format([{
+            "range": f"A{start_dupes}:{last_col}{end_dupes}",
             "format": {
                 "backgroundColor": {"red": 0.6, "green": 0, "blue": 0},
                 "textFormat": {
                     "foregroundColor": {"red": 1, "green": 1, "blue": 1},
                 },
             },
-        })
-
-    if formats:
-        worksheet.batch_format(formats)
+        }])
 
     apply_standard_formatting(sh, worksheet, num_cols)
     progress.progress(90)
 
-    # ── 9. Share ─────────────────────────────────
+    # ── 10. Share (without email notifications) ──
     for email in PLUMBING_SHARE_EMAILS:
         status.write(f"🔗 Sharing with {email}…")
-        sh.share(email, perm_type="user", role="writer")
+        sh.share(email, perm_type="user", role="writer", notify=False)
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
