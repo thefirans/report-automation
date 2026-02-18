@@ -397,17 +397,16 @@ PLUMBING_REVIEWS_SHEET_NAME = "PLUMBING REVIEWS"  # ← CHANGE THIS to your actu
 # ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
     "yuskov.y@workflow.com.ua",
-    # "alina@workflow.com.ua",     ← uncomment & edit
-    # "someone@workflow.com.ua",   ← add more as needed
+    "alina.tryncha@workflow.com.ua",
+    "oleksandr.leoshko@workflow.com.ua",
 ]
 
 # Review tabs inside the plumbing reviews sheet + which column has Invoice Number
 # Format: (tab_name, column_index)  — column 3 = column C
 PLUMBING_REVIEW_TABS = [
-    ("Alina", 3),       # column C
+    ("Alina", 1),       # column C
     ("Alex", 3),        # column C
-    ("Eugene", 3),      # column C
-    ("Sold/Posted", 3), # column C
+    ("Eugene", 2) # column C
 ]
 
 
@@ -416,7 +415,7 @@ def run_plumbing(xlsx_file):
     Plumbing pipeline:
     1. Read XLSX with plumbing-specific columns
     2. Upload to new Google Sheet named "Plumbing {yesterday} automated"
-    3. Check 4 review tabs (Alina, Alex, Eugene, Sold/Posted) for duplicate Invoice Numbers
+    3. Check 3 review tabs (Alina, Alex, Eugene) for duplicate Invoice Numbers
     4. Color duplicate rows dark red with white text
     5. Share with specified users and return URL
     """
