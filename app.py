@@ -391,13 +391,11 @@ def run_usa_housecall(csv_file):
 # TAB 3 — Plumbing
 # ══════════════════════════════════════════════
 
-# ⚠️ TODO: Replace with the actual Google Sheet name (or open by URL/ID instead)
 PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
 
-# ⚠️ TODO: Replace with real corporate emails to share the plumbing report with
 PLUMBING_SHARE_EMAILS = [
     "yuskov.y@workflow.com.ua",
-    #"alina.tryncha@workflow.com.ua",
+    "alina.tryncha@workflow.com.ua",
     "oleksandr.leoshko@workflow.com.ua",
 ]
 
@@ -583,7 +581,7 @@ def run_plumbing(xlsx_file):
     # ── 9. Share ─────────────────────────────────
     for email in PLUMBING_SHARE_EMAILS:
         status.write(f"🔗 Sharing with {email}…")
-        sh.share(email, perm_type="user", role="writer")
+        sh.share(email, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -647,4 +645,4 @@ with tab3:
 
 # ── Footer ────────────────────────────────────
 st.divider()
-st.caption("Report Automation v2.0")
+st.caption("Report Automation v2.1")
