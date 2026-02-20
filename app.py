@@ -216,7 +216,7 @@ def run_workflow_pros_crm(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify=False)
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -379,7 +379,7 @@ def run_usa_housecall(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify=False)
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -488,24 +488,30 @@ def run_plumbing(xlsx_file):
     worksheet = sh.get_worksheet(0)
     progress.progress(40)
 
-    # ── 5. Upload is deferred — first we need to reorder rows ──
+    # ── 5. Upload data ───────────────────────────
+    status.write("⬆️ Uploading data…")
+    worksheet.update([df.columns.tolist()] + df.values.tolist())
+    progress.progress(50)
 
     # ── 6. Fetch review invoices from all tabs ───
     status.write("📋 Loading plumbing review invoices…")
     try:
         reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
 
-        all_review_invoices = set()
+        # Map invoice number → tab name (first match wins)
+        invoice_to_tab = {}
         for tab_name, col_index in PLUMBING_REVIEW_TABS:
             try:
                 ws = reviews_sheet.worksheet(tab_name)
-                invoices = {
+                tab_invoices = [
                     str(x).strip()
                     for x in ws.col_values(col_index)
                     if str(x).strip()
-                }
-                all_review_invoices.update(invoices)
-                status.write(f"   ✅ {tab_name}: {len(invoices)} invoices loaded")
+                ]
+                for inv in tab_invoices:
+                    if inv not in invoice_to_tab:
+                        invoice_to_tab[inv] = tab_name
+                status.write(f"   ✅ {tab_name}: {len(tab_invoices)} invoices loaded")
             except gspread.exceptions.WorksheetNotFound:
                 status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
 
@@ -522,16 +528,22 @@ def run_plumbing(xlsx_file):
 
     for _, row in df.iterrows():
         inv_num = str(row["Invoice Number"]).strip()
-        if inv_num and inv_num in all_review_invoices:
-            duplicate_rows.append(row)
+        if inv_num and inv_num in invoice_to_tab:
+            row_copy = row.copy()
+            row_copy["Found On"] = invoice_to_tab[inv_num]
+            duplicate_rows.append(row_copy)
         else:
-            clean_rows.append(row)
+            row_copy = row.copy()
+            row_copy["Found On"] = ""
+            clean_rows.append(row_copy)
 
+    # Build final DataFrame with the extra "Found On" column
+    FINAL_COLS = OUTPUT_COLS + ["Found On"]
     ordered_df = pd.DataFrame(clean_rows + duplicate_rows)
     if not ordered_df.empty:
-        ordered_df = ordered_df[OUTPUT_COLS]
+        ordered_df = ordered_df[FINAL_COLS]
     else:
-        ordered_df = pd.DataFrame(columns=OUTPUT_COLS)
+        ordered_df = pd.DataFrame(columns=FINAL_COLS)
     ordered_df = ordered_df.fillna("")
 
     # Convert ALL values to plain strings for Google Sheets API
@@ -548,11 +560,10 @@ def run_plumbing(xlsx_file):
 
     # ── 9. Color duplicate rows (now at the bottom) dark red ──
     status.write("🎨 Applying formatting…")
-    num_cols = len(OUTPUT_COLS)
-    last_col = chr(ord("A") + num_cols - 1)  # G
+    num_cols = len(FINAL_COLS)  # 8 columns (G + Found On = H)
+    last_col = chr(ord("A") + num_cols - 1)  # H
 
     if duplicate_rows:
-        # Duplicates start after all clean rows + 1 header row
         start_dupes = len(clean_rows) + 2  # +2: row 1 = header, data from row 2
         end_dupes = start_dupes + len(duplicate_rows) - 1
 
@@ -569,10 +580,10 @@ def run_plumbing(xlsx_file):
     apply_standard_formatting(sh, worksheet, num_cols)
     progress.progress(90)
 
-    # ── 10. Share (without email notifications) ──
+    # ── 9. Share ─────────────────────────────────
     for email in PLUMBING_SHARE_EMAILS:
         status.write(f"🔗 Sharing with {email}…")
-        sh.share(email, perm_type="user", role="writer", notify=False)
+        sh.share(email, perm_type="user", role="writer")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
