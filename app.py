@@ -88,7 +88,7 @@ def run_workflow_pros_crm(csv_file):
     REQUIRED_COLS = [
         "Invoice ID", "Payment Date", "Payment Method", "Payment Status",
         "Payment Amount", "Outstanding Balance", "Client", "Email",
-        "Phone Number", "Total", "Created By",
+        "Phone Number", "Total", "Technicians",
     ]
 
     status = st.status("Running Workflow Pros CRM report…", expanded=True)
