@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import datetime
 import json
+import math
 
 # ──────────────────────────────────────────────
 # Page config
@@ -45,6 +46,72 @@ def money_to_float(x) -> float:
 def get_yesterday_str() -> str:
     """Returns yesterday's date as DD.MM"""
     return (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%d.%m")
+
+
+def _sheet_cell_to_json_safe(value):
+    """Convert pandas / numpy / datetime values into JSON-safe sheet cells."""
+    if value is None or pd.isna(value):
+        return ""
+
+    # numpy scalar values need to become native Python types before JSON encoding.
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        try:
+            value = value.item()
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    if isinstance(value, pd.Timestamp):
+        if value.time() == datetime.time(0, 0):
+            return value.date().isoformat()
+        return value.isoformat(sep=" ", timespec="seconds")
+
+    if isinstance(value, datetime.datetime):
+        if value.time() == datetime.time(0, 0):
+            return value.date().isoformat()
+        return value.isoformat(sep=" ", timespec="seconds")
+
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, int):
+        return value
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else ""
+
+    if isinstance(value, str):
+        return value
+
+    return str(value)
+
+
+def validate_worksheet_payload(payload):
+    """Fail fast if a worksheet payload still contains JSON-unsafe values."""
+    for row_idx, row in enumerate(payload):
+        for col_idx, value in enumerate(row):
+            if value == "" or isinstance(value, (str, int, bool)):
+                continue
+            if isinstance(value, float) and math.isfinite(value):
+                continue
+            raise TypeError(
+                f"Worksheet payload contains non-JSON-safe value at "
+                f"row {row_idx}, col {col_idx}: {type(value).__name__}"
+            )
+
+
+def dataframe_to_worksheet_payload(df: pd.DataFrame):
+    """Build a gspread-ready payload containing only JSON-safe primitives."""
+    header_row = [_sheet_cell_to_json_safe(col) for col in df.columns.tolist()]
+    data_rows = [
+        [_sheet_cell_to_json_safe(value) for value in row]
+        for row in df.itertuples(index=False, name=None)
+    ]
+    payload = [header_row] + data_rows
+    validate_worksheet_payload(payload)
+    return payload
 
 
 def apply_standard_formatting(sh, worksheet, num_cols):
@@ -488,7 +555,7 @@ def run_plumbing(xlsx_file):
 
     # ── 5. Upload data ───────────────────────────
     status.write("⬆️ Uploading data…")
-    worksheet.update([df.columns.tolist()] + df.values.tolist())
+    worksheet.update(dataframe_to_worksheet_payload(df))
     progress.progress(50)
 
     # ── 6. Fetch review invoices from all tabs ───
