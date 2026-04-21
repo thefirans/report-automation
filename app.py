@@ -712,4 +712,4 @@ with tab3:
 
 # ── Footer ────────────────────────────────────
 st.divider()
-st.caption("Report Automation v2.1")
+st.caption("Report Automation v2.1.1")
