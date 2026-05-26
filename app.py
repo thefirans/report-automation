@@ -143,22 +143,54 @@ SHARE_EMAIL = "yuskov.y@workflow.com.ua"
 
 
 # ══════════════════════════════════════════════
-# TAB 1 — Workflow Pros CRM
+# TAB 1 — Appliance Workflow CRM
 # ══════════════════════════════════════════════
-def run_workflow_pros_crm(csv_file):
-    """
-    Original Ontario/Alberta pipeline — same logic as before.
-    Reads Workflow Pros CRM CSV, filters, matches invoices against
-    🟢GOOD REVIEWS sheet, colors yellow/orange, uploads to Google Sheets.
-    """
-
-    REQUIRED_COLS = [
+def build_workflow_crm_columns(df: pd.DataFrame):
+    """Return required Workflow CRM columns plus optional pass-through city."""
+    required_cols = [
         "Invoice ID", "Payment Date", "Payment Method", "Payment Status",
         "Payment Amount", "Outstanding Balance", "Client", "Email",
         "Phone Number", "Total", "Technicians",
     ]
+    selected_cols = required_cols.copy()
+    if "city" in df.columns:
+        selected_cols.append("city")
+    return required_cols, selected_cols
 
-    status = st.status("Running Workflow Pros CRM report…", expanded=True)
+
+def load_plumbing_review_invoice_map(client, status=None):
+    """Load plumbing review invoices and map them to the first tab where they appear."""
+    reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
+    invoice_to_tab = {}
+
+    for tab_name, col_index in PLUMBING_REVIEW_TABS:
+        try:
+            ws = reviews_sheet.worksheet(tab_name)
+            tab_invoices = [
+                str(x).strip()
+                for x in ws.col_values(col_index)
+                if str(x).strip()
+            ]
+            for inv in tab_invoices:
+                if inv not in invoice_to_tab:
+                    invoice_to_tab[inv] = tab_name
+            if status is not None:
+                status.write(f"   ✅ {tab_name}: {len(tab_invoices)} invoices loaded")
+        except gspread.exceptions.WorksheetNotFound:
+            if status is not None:
+                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
+
+    return invoice_to_tab
+
+
+def run_appliance_workflow_crm(csv_file):
+    """
+    Original Ontario/Alberta pipeline — same logic as before.
+    Reads Appliance Workflow CRM CSV, filters, matches invoices against
+    🟢GOOD REVIEWS sheet, colors yellow/orange, uploads to Google Sheets.
+    """
+
+    status = st.status("Running Appliance Workflow CRM report…", expanded=True)
     progress = st.progress(0)
 
     # ── 1. Read CSV ──────────────────────────────
@@ -166,13 +198,15 @@ def run_workflow_pros_crm(csv_file):
     df = pd.read_csv(csv_file)
     progress.progress(10)
 
+    required_cols, selected_cols = build_workflow_crm_columns(df)
+
     # ── 2. Validate columns ──────────────────────
-    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    missing = [c for c in required_cols if c not in df.columns]
     if missing:
         st.error(f"❌ Missing columns in CSV: {missing}")
         return None
 
-    df = df[REQUIRED_COLS].copy()
+    df = df[selected_cols].copy()
     status.write("✅ Columns validated.")
     progress.progress(20)
 
@@ -242,7 +276,7 @@ def run_workflow_pros_crm(csv_file):
 
     # ── 7. Create Google Sheet ───────────────────
     yesterday = get_yesterday_str()
-    sheet_name = f"Workflow CRM {yesterday} automated"
+    sheet_name = f"Appliance Workflow CRM {yesterday} automated"
 
     status.write(f"📝 Creating sheet: {sheet_name}")
     sh = client.create(sheet_name, folder_id=FOLDER_ID)
@@ -251,12 +285,12 @@ def run_workflow_pros_crm(csv_file):
 
     # ── 8. Upload data ───────────────────────────
     status.write("⬆️ Uploading data…")
-    worksheet.update([ordered_df.columns.tolist()] + ordered_df.values.tolist())
+    worksheet.update(dataframe_to_worksheet_payload(ordered_df))
     progress.progress(80)
 
     # ── 9. Formatting ────────────────────────────
     status.write("🎨 Applying formatting…")
-    num_cols = len(REQUIRED_COLS)
+    num_cols = len(ordered_df.columns)
     last_col = chr(ord("A") + num_cols - 1)  # K
 
     start_yellow = len(regular_no_due) + len(regular_due) + 2
@@ -283,7 +317,162 @@ def run_workflow_pros_crm(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    progress.progress(100)
+
+    url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
+    status.update(label="✅ Report complete!", state="complete", expanded=False)
+    return url
+
+
+def run_plumbing_workflow_crm(csv_file):
+    """
+    Plumbing Workflow CRM pipeline.
+    Uses the same CSV structure as Appliance Workflow CRM, but removes any
+    invoice already found in the plumbing review spreadsheet before upload.
+    """
+
+    status = st.status("Running Plumbing Workflow CRM report…", expanded=True)
+    progress = st.progress(0)
+
+    # ── 1. Read CSV ──────────────────────────────
+    status.write("📂 Reading CSV…")
+    df = pd.read_csv(csv_file)
+    progress.progress(10)
+
+    required_cols, selected_cols = build_workflow_crm_columns(df)
+
+    # ── 2. Validate columns ──────────────────────
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"❌ Missing columns in CSV: {missing}")
+        return None
+
+    df = df[selected_cols].copy()
+    status.write("✅ Columns validated.")
+    progress.progress(20)
+
+    # ── 3. Filter: Payment Amount > 0 ────────────
+    df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
+    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+
+    before_dedup = len(df)
+    df = df.drop_duplicates(subset=["Invoice ID"], keep="first")
+    dupes_removed = before_dedup - len(df)
+    status.write(f"✅ Filtered to {len(df)} rows (Payment Amount > 0, {dupes_removed} duplicate invoices removed).")
+    progress.progress(30)
+
+    # ── 4. Auth Google Sheets ────────────────────
+    status.write("🔑 Connecting to Google Sheets…")
+    try:
+        client = get_gspread_client()
+    except Exception as e:
+        st.error(f"❌ Google auth failed: {e}")
+        return None
+    progress.progress(40)
+
+    # ── 5. Remove invoices already found in plumbing reviews ──
+    status.write("📋 Checking plumbing review invoices…")
+    try:
+        plumbing_review_invoices = set(load_plumbing_review_invoice_map(client, status).keys())
+    except Exception as e:
+        st.error(f"❌ Could not read plumbing reviews sheet: {e}")
+        return None
+
+    before_diff = len(df)
+    df = df[~df["Invoice ID"].isin(plumbing_review_invoices)].copy()
+    removed_from_diff = before_diff - len(df)
+    status.write(f"✅ Removed {removed_from_diff} invoice(s) already present in plumbing reviews.")
+    progress.progress(50)
+
+    # ── 6. Fetch review invoices ─────────────────
+    status.write("📋 Loading review invoices…")
+    try:
+        reviews_sheet = client.open("🟢GOOD REVIEWS")
+        alex_invoices = {
+            str(x).strip()
+            for x in reviews_sheet.worksheet("Oleksandr Leoshko").col_values(3)
+            if str(x).strip()
+        }
+        eugene_invoices = {
+            str(x).strip()
+            for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
+            if str(x).strip()
+        }
+    except Exception as e:
+        st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
+        return None
+    progress.progress(60)
+
+    # ── 7. Categorize rows ───────────────────────
+    status.write("🔀 Categorizing rows…")
+    regular_no_due, regular_due, yellow_rows, orange_rows = [], [], [], []
+
+    for _, row in df.iterrows():
+        inv = str(row["Invoice ID"]).strip()
+        outstanding = money_to_float(row["Outstanding Balance"])
+
+        if inv in alex_invoices:
+            yellow_rows.append(row)
+        elif inv in eugene_invoices:
+            orange_rows.append(row)
+        elif outstanding > 0:
+            regular_due.append(row)
+        else:
+            regular_no_due.append(row)
+
+    ordered_df = pd.DataFrame(regular_no_due + regular_due + yellow_rows + orange_rows)
+    if not ordered_df.empty:
+        ordered_df = ordered_df[df.columns]
+    else:
+        ordered_df = pd.DataFrame(columns=df.columns)
+    ordered_df = ordered_df.fillna("")
+    progress.progress(70)
+
+    # ── 8. Create Google Sheet ───────────────────
+    yesterday = get_yesterday_str()
+    sheet_name = f"Plumbing Workflow CRM {yesterday} automated"
+
+    status.write(f"📝 Creating sheet: {sheet_name}")
+    sh = client.create(sheet_name, folder_id=FOLDER_ID)
+    worksheet = sh.get_worksheet(0)
+    progress.progress(80)
+
+    # ── 9. Upload data ───────────────────────────
+    status.write("⬆️ Uploading data…")
+    worksheet.update(dataframe_to_worksheet_payload(ordered_df))
+    progress.progress(90)
+
+    # ── 10. Formatting ───────────────────────────
+    status.write("🎨 Applying formatting…")
+    num_cols = len(ordered_df.columns)
+    last_col = chr(ord("A") + num_cols - 1)
+
+    start_yellow = len(regular_no_due) + len(regular_due) + 2
+    end_yellow = start_yellow + len(yellow_rows)
+    start_orange = end_yellow
+    end_orange = start_orange + len(orange_rows)
+
+    formats = []
+    if yellow_rows:
+        formats.append({
+            "range": f"A{start_yellow}:{last_col}{end_yellow - 1}",
+            "format": {"backgroundColor": {"red": 1, "green": 1, "blue": 0}},
+        })
+    if orange_rows:
+        formats.append({
+            "range": f"A{start_orange}:{last_col}{end_orange - 1}",
+            "format": {"backgroundColor": {"red": 1, "green": 0.6, "blue": 0}},
+        })
+    if formats:
+        worksheet.batch_format(formats)
+
+    apply_standard_formatting(sh, worksheet, num_cols)
+    progress.progress(95)
+
+    # ── 11. Share ────────────────────────────────
+    status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -446,7 +635,7 @@ def run_usa_housecall(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -455,7 +644,7 @@ def run_usa_housecall(csv_file):
 
 
 # ══════════════════════════════════════════════
-# TAB 3 — Plumbing
+# TAB 4 — Plumbing Titan Old
 # ══════════════════════════════════════════════
 
 PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
@@ -475,11 +664,11 @@ PLUMBING_REVIEW_TABS = [
 ]
 
 
-def run_plumbing(xlsx_file):
+def run_plumbing_titan_old(xlsx_file):
     """
-    Plumbing pipeline:
+    Plumbing Titan Old pipeline:
     1. Read XLSX with plumbing-specific columns
-    2. Upload to new Google Sheet named "Plumbing {yesterday} automated"
+    2. Upload to new Google Sheet named "Plumbing Titan Old {yesterday} automated"
     3. Check 3 review tabs (Alina, Alex, Eugene) for duplicate Invoice Numbers
     4. Color duplicate rows dark red with white text
     5. Share with specified users and return URL
@@ -497,7 +686,7 @@ def run_plumbing(xlsx_file):
         "Paid On", "Completion Date", "Assigned Technicians",
     ]
 
-    status = st.status("Running Plumbing report…", expanded=True)
+    status = st.status("Running Plumbing Titan Old report…", expanded=True)
     progress = st.progress(0)
 
     # ── 1. Read XLSX ─────────────────────────────
@@ -546,7 +735,7 @@ def run_plumbing(xlsx_file):
 
     # ── 4. Create Google Sheet ───────────────────
     yesterday = get_yesterday_str()
-    sheet_name = f"Plumbing {yesterday} automated"
+    sheet_name = f"Plumbing Titan Old {yesterday} automated"
 
     status.write(f"📝 Creating sheet: {sheet_name}")
     sh = client.create(sheet_name, folder_id=FOLDER_ID)
@@ -561,25 +750,7 @@ def run_plumbing(xlsx_file):
     # ── 6. Fetch review invoices from all tabs ───
     status.write("📋 Loading plumbing review invoices…")
     try:
-        reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
-
-        # Map invoice number → tab name (first match wins)
-        invoice_to_tab = {}
-        for tab_name, col_index in PLUMBING_REVIEW_TABS:
-            try:
-                ws = reviews_sheet.worksheet(tab_name)
-                tab_invoices = [
-                    str(x).strip()
-                    for x in ws.col_values(col_index)
-                    if str(x).strip()
-                ]
-                for inv in tab_invoices:
-                    if inv not in invoice_to_tab:
-                        invoice_to_tab[inv] = tab_name
-                status.write(f"   ✅ {tab_name}: {len(tab_invoices)} invoices loaded")
-            except gspread.exceptions.WorksheetNotFound:
-                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
-
+        invoice_to_tab = load_plumbing_review_invoice_map(client, status)
     except Exception as e:
         st.error(f"❌ Could not read plumbing reviews sheet: {e}")
         return None
@@ -620,7 +791,7 @@ def run_plumbing(xlsx_file):
 
     # ── 8. Upload reordered data ─────────────────
     status.write("⬆️ Uploading data…")
-    worksheet.update([ordered_df.columns.tolist()] + ordered_df.values.tolist())
+    worksheet.update(dataframe_to_worksheet_payload(ordered_df))
     progress.progress(75)
 
     # ── 9. Color duplicate rows (now at the bottom) dark red ──
@@ -652,30 +823,31 @@ def run_plumbing(xlsx_file):
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
-    status.update(label="✅ Plumbing report complete!", state="complete", expanded=False)
+    status.update(label="✅ Plumbing Titan Old report complete!", state="complete", expanded=False)
     return url
 
 
 # ══════════════════════════════════════════════
-# MAIN UI — Three Tabs
+# MAIN UI — Four Tabs
 # ══════════════════════════════════════════════
-tab1, tab2, tab3 = st.tabs([
-    "🔧 Workflow Pros CRM",
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🔧 Appliance Workflow CRM",
     "🇺🇸 USA (Housecall)",
-    "🚿 Plumbing",
+    "🛠️ Plumbing Workflow CRM",
+    "🚿 Plumbing Titan Old",
 ])
 
-# ── Tab 1: Workflow Pros CRM ─────────────────
+# ── Tab 1: Appliance Workflow CRM ───────────
 with tab1:
-    st.subheader("Workflow Pros CRM")
-    st.caption("Ontario & Alberta — upload CSV from Workflow Pros CRM")
+    st.subheader("Appliance Workflow CRM")
+    st.caption("Ontario & Alberta — upload CSV from Appliance Workflow CRM")
     csv_file_1 = st.file_uploader("Upload CSV file", type=["csv"], key="workflow_csv")
 
     if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_workflow"):
         if csv_file_1 is None:
             st.warning("Please upload a CSV file first.")
         else:
-            url = run_workflow_pros_crm(csv_file_1)
+            url = run_appliance_workflow_crm(csv_file_1)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
@@ -695,21 +867,36 @@ with tab2:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 3: Plumbing ──────────────────────────
+# ── Tab 3: Plumbing Workflow CRM ────────────
 with tab3:
-    st.subheader("Plumbing")
-    st.caption("Upload XLSX export — duplicate invoices will be highlighted in dark red")
-    xlsx_file = st.file_uploader("Upload XLSX file", type=["xlsx"], key="plumbing_xlsx")
+    st.subheader("Plumbing Workflow CRM")
+    st.caption("Upload CSV from Plumbing Workflow CRM — invoices already present in plumbing reviews will be removed")
+    csv_file_3 = st.file_uploader("Upload CSV file", type=["csv"], key="plumbing_workflow_csv")
 
-    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing"):
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing_workflow"):
+        if csv_file_3 is None:
+            st.warning("Please upload a CSV file first.")
+        else:
+            url = run_plumbing_workflow_crm(csv_file_3)
+            if url:
+                st.success("Report generated successfully!")
+                st.markdown(f"### [📄 Open Google Sheet]({url})")
+
+# ── Tab 4: Plumbing Titan Old ───────────────
+with tab4:
+    st.subheader("Plumbing Titan Old")
+    st.caption("Upload XLSX export — duplicate invoices will be highlighted in dark red")
+    xlsx_file = st.file_uploader("Upload XLSX file", type=["xlsx"], key="plumbing_titan_old_xlsx")
+
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing_titan_old"):
         if xlsx_file is None:
             st.warning("Please upload an XLSX file first.")
         else:
-            url = run_plumbing(xlsx_file)
+            url = run_plumbing_titan_old(xlsx_file)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
 # ── Footer ────────────────────────────────────
 st.divider()
-st.caption("Report Automation v2.1.1")
+st.caption("Report Automation v3.0")
