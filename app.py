@@ -429,8 +429,9 @@ def run_plumbing_workflow_crm(csv_file):
     progress.progress(95)
 
     # ── 11. Share ────────────────────────────────
-    status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
+    for email in [SHARE_EMAIL, "alina.tryncha@workflow.com.ua"]:
+        status.write(f"🔗 Sharing with {email}…")
+        sh.share(email, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
