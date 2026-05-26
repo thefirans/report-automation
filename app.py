@@ -277,7 +277,7 @@ def run_appliance_workflow_crm(csv_file):
 
     # ── 7. Create Google Sheet ───────────────────
     yesterday = get_yesterday_str()
-    sheet_name = f"Appliance Workflow CRM {yesterday} automated"
+    sheet_name = f"Appliance WF {yesterday} automated"
 
     status.write(f"📝 Creating sheet: {sheet_name}")
     sh = client.create(sheet_name, folder_id=FOLDER_ID)
@@ -408,7 +408,7 @@ def run_plumbing_workflow_crm(csv_file):
 
     # ── 8. Create Google Sheet ───────────────────
     yesterday = get_yesterday_str()
-    sheet_name = f"Plumbing Workflow CRM {yesterday} automated"
+    sheet_name = f"Plumbing WF {yesterday} automated"
 
     status.write(f"📝 Creating sheet: {sheet_name}")
     sh = client.create(sheet_name, folder_id=FOLDER_ID)
@@ -857,4 +857,4 @@ with tab4:
 
 # ── Footer ────────────────────────────────────
 st.divider()
-st.caption("Report Automation v3.0")
+st.caption("Report Automation v3.1")
