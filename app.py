@@ -318,7 +318,7 @@ def run_appliance_workflow_crm(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -430,7 +430,7 @@ def run_plumbing_workflow_crm(csv_file):
 
     # ── 11. Share ────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -593,7 +593,7 @@ def run_usa_housecall(csv_file):
 
     # ── 10. Share ─────────────────────────────────
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
-    sh.share(SHARE_EMAIL, perm_type="user", role="writer")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
