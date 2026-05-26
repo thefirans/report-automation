@@ -329,7 +329,7 @@ def run_appliance_workflow_crm(csv_file):
 def run_plumbing_workflow_crm(csv_file):
     """
     Plumbing Workflow CRM pipeline.
-    Uses the same CSV structure as Appliance Workflow CRM, but removes any
+    Uses the same CSV structure as Appliance Workflow CRM, but marks any
     invoice already found in the plumbing review spreadsheet before upload.
     """
 
@@ -372,38 +372,43 @@ def run_plumbing_workflow_crm(csv_file):
         return None
     progress.progress(40)
 
-    # ── 5. Remove invoices already found in plumbing reviews ──
-    status.write("📋 Checking plumbing review invoices…")
+    # ── 5. Load plumbing review invoices ─────────
+    status.write("📋 Loading plumbing review invoices…")
     try:
-        plumbing_review_invoices = set(load_plumbing_review_invoice_map(client, status).keys())
+        invoice_to_tab = load_plumbing_review_invoice_map(client, status)
     except Exception as e:
         st.error(f"❌ Could not read plumbing reviews sheet: {e}")
         return None
-
-    before_diff = len(df)
-    df = df[~df["Invoice ID"].isin(plumbing_review_invoices)].copy()
-    removed_from_diff = before_diff - len(df)
-    status.write(f"✅ Removed {removed_from_diff} invoice(s) already present in plumbing reviews.")
     progress.progress(50)
 
-    # ── 6. Order rows using the base Workflow CRM logic ──
-    status.write("🔀 Reordering rows…")
-    regular_no_due, regular_due = [], []
+    # ── 6. Reorder rows and mark duplicates ──────
+    status.write("🔀 Reordering rows (duplicates → bottom)…")
+    regular_no_due, regular_due, duplicate_rows = [], [], []
     for _, row in df.iterrows():
+        inv = str(row["Invoice ID"]).strip()
         outstanding = money_to_float(row["Outstanding Balance"])
-        if outstanding > 0:
-            regular_due.append(row)
+
+        row_copy = row.copy()
+        if inv and inv in invoice_to_tab:
+            row_copy["Found On"] = invoice_to_tab[inv]
+            duplicate_rows.append(row_copy)
+        elif outstanding > 0:
+            row_copy["Found On"] = ""
+            regular_due.append(row_copy)
         else:
-            regular_no_due.append(row)
+            row_copy["Found On"] = ""
+            regular_no_due.append(row_copy)
     progress.progress(60)
 
     # ── 7. Build output ──────────────────────────
-    ordered_df = pd.DataFrame(regular_no_due + regular_due)
+    final_cols = list(df.columns) + ["Found On"]
+    ordered_df = pd.DataFrame(regular_no_due + regular_due + duplicate_rows)
     if not ordered_df.empty:
-        ordered_df = ordered_df[df.columns]
+        ordered_df = ordered_df[final_cols]
     else:
-        ordered_df = pd.DataFrame(columns=df.columns)
+        ordered_df = pd.DataFrame(columns=final_cols)
     ordered_df = ordered_df.fillna("")
+    status.write(f"   {len(regular_no_due) + len(regular_due)} clean rows + {len(duplicate_rows)} duplicate(s).")
     progress.progress(70)
 
     # ── 8. Create Google Sheet ───────────────────
@@ -424,6 +429,19 @@ def run_plumbing_workflow_crm(csv_file):
     status.write("🎨 Applying formatting…")
     num_cols = len(ordered_df.columns)
     last_col = chr(ord("A") + num_cols - 1)
+
+    if duplicate_rows:
+        start_dupes = len(regular_no_due) + len(regular_due) + 2
+        end_dupes = start_dupes + len(duplicate_rows) - 1
+        worksheet.batch_format([{
+            "range": f"A{start_dupes}:{last_col}{end_dupes}",
+            "format": {
+                "backgroundColor": {"red": 0.6, "green": 0, "blue": 0},
+                "textFormat": {
+                    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                },
+            },
+        }])
 
     apply_standard_formatting(sh, worksheet, num_cols)
     progress.progress(95)
