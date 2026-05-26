@@ -153,8 +153,9 @@ def build_workflow_crm_columns(df: pd.DataFrame):
         "Phone Number", "Total", "Technicians",
     ]
     selected_cols = required_cols.copy()
-    if "city" in df.columns:
-        selected_cols.append("city")
+    city_col = next((col for col in df.columns if str(col).strip().lower() == "city"), None)
+    if city_col is not None:
+        selected_cols.append(city_col)
     return required_cols, selected_cols
 
 
@@ -385,43 +386,19 @@ def run_plumbing_workflow_crm(csv_file):
     status.write(f"✅ Removed {removed_from_diff} invoice(s) already present in plumbing reviews.")
     progress.progress(50)
 
-    # ── 6. Fetch review invoices ─────────────────
-    status.write("📋 Loading review invoices…")
-    try:
-        reviews_sheet = client.open("🟢GOOD REVIEWS")
-        alex_invoices = {
-            str(x).strip()
-            for x in reviews_sheet.worksheet("Oleksandr Leoshko").col_values(3)
-            if str(x).strip()
-        }
-        eugene_invoices = {
-            str(x).strip()
-            for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
-            if str(x).strip()
-        }
-    except Exception as e:
-        st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
-        return None
-    progress.progress(60)
-
-    # ── 7. Categorize rows ───────────────────────
-    status.write("🔀 Categorizing rows…")
-    regular_no_due, regular_due, yellow_rows, orange_rows = [], [], [], []
-
+    # ── 6. Order rows using the base Workflow CRM logic ──
+    status.write("🔀 Reordering rows…")
+    regular_no_due, regular_due = [], []
     for _, row in df.iterrows():
-        inv = str(row["Invoice ID"]).strip()
         outstanding = money_to_float(row["Outstanding Balance"])
-
-        if inv in alex_invoices:
-            yellow_rows.append(row)
-        elif inv in eugene_invoices:
-            orange_rows.append(row)
-        elif outstanding > 0:
+        if outstanding > 0:
             regular_due.append(row)
         else:
             regular_no_due.append(row)
+    progress.progress(60)
 
-    ordered_df = pd.DataFrame(regular_no_due + regular_due + yellow_rows + orange_rows)
+    # ── 7. Build output ──────────────────────────
+    ordered_df = pd.DataFrame(regular_no_due + regular_due)
     if not ordered_df.empty:
         ordered_df = ordered_df[df.columns]
     else:
@@ -447,25 +424,6 @@ def run_plumbing_workflow_crm(csv_file):
     status.write("🎨 Applying formatting…")
     num_cols = len(ordered_df.columns)
     last_col = chr(ord("A") + num_cols - 1)
-
-    start_yellow = len(regular_no_due) + len(regular_due) + 2
-    end_yellow = start_yellow + len(yellow_rows)
-    start_orange = end_yellow
-    end_orange = start_orange + len(orange_rows)
-
-    formats = []
-    if yellow_rows:
-        formats.append({
-            "range": f"A{start_yellow}:{last_col}{end_yellow - 1}",
-            "format": {"backgroundColor": {"red": 1, "green": 1, "blue": 0}},
-        })
-    if orange_rows:
-        formats.append({
-            "range": f"A{start_orange}:{last_col}{end_orange - 1}",
-            "format": {"backgroundColor": {"red": 1, "green": 0.6, "blue": 0}},
-        })
-    if formats:
-        worksheet.batch_format(formats)
 
     apply_standard_formatting(sh, worksheet, num_cols)
     progress.progress(95)
