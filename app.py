@@ -245,6 +245,16 @@ def run_appliance_workflow_crm(csv_file):
             for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
             if str(x).strip()
         }
+        removal_invoices = set()
+        for tab_name in ["Zakaria", "Dio", "Jacob", "Artem"]:
+            try:
+                removal_invoices.update(
+                    str(x).strip()
+                    for x in reviews_sheet.worksheet(tab_name).col_values(3)
+                    if str(x).strip()
+                )
+            except gspread.exceptions.WorksheetNotFound:
+                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
     except Exception as e:
         st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
         return None
@@ -253,11 +263,15 @@ def run_appliance_workflow_crm(csv_file):
     # ── 6. Categorize rows ───────────────────────
     status.write("🔀 Categorizing rows…")
     regular_no_due, regular_due, yellow_rows, orange_rows = [], [], [], []
+    removed_rows = 0
 
     for _, row in df.iterrows():
         inv = str(row["Invoice ID"]).strip()
         outstanding = money_to_float(row["Outstanding Balance"])
 
+        if inv in removal_invoices:
+            removed_rows += 1
+            continue
         if inv in alex_invoices:
             yellow_rows.append(row)
         elif inv in eugene_invoices:
@@ -273,6 +287,8 @@ def run_appliance_workflow_crm(csv_file):
     else:
         ordered_df = pd.DataFrame(columns=df.columns)
     ordered_df = ordered_df.fillna("")
+    if removed_rows:
+        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem tabs.")
     progress.progress(60)
 
     # ── 7. Create Google Sheet ───────────────────
