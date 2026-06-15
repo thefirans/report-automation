@@ -558,6 +558,16 @@ def run_usa_housecall(csv_file):
             for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
             if str(x).strip()
         }
+        removal_invoices = set()
+        for tab_name in ["Zakaria", "Dio", "Jacob", "Artem"]:
+            try:
+                removal_invoices.update(
+                    str(x).strip()
+                    for x in reviews_sheet.worksheet(tab_name).col_values(3)
+                    if str(x).strip()
+                )
+            except gspread.exceptions.WorksheetNotFound:
+                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
     except Exception as e:
         st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
         return None
@@ -566,10 +576,14 @@ def run_usa_housecall(csv_file):
     # ── 6. Categorize rows (by Invoice Number ONLY) ──
     status.write("🔀 Categorizing rows…")
     regular_rows, yellow_rows, orange_rows = [], [], []
+    removed_rows = 0
 
     for _, row in final_df.iterrows():
         inv_num = str(row["Invoice Number"]).strip()
 
+        if inv_num in removal_invoices:
+            removed_rows += 1
+            continue
         if inv_num in alex_invoices:
             yellow_rows.append(row)
         elif inv_num in eugene_invoices:
@@ -583,6 +597,8 @@ def run_usa_housecall(csv_file):
     else:
         ordered_df = pd.DataFrame(columns=OUTPUT_COLS)
     ordered_df = ordered_df.fillna("")
+    if removed_rows:
+        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem tabs.")
     progress.progress(60)
 
     # ── 7. Create Google Sheet ───────────────────
