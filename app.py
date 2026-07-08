@@ -246,11 +246,11 @@ def run_appliance_workflow_crm(csv_file):
             if str(x).strip()
         }
         removal_invoices = set()
-        for tab_name in ["Zakaria", "Dio", "Jacob", "Artem"]:
+        for tab_name, col_index in [("Zakaria", 2), ("Dio", 3), ("Jacob", 3), ("Artem", 3), ("Gleb", 3)]:
             try:
                 removal_invoices.update(
                     str(x).strip()
-                    for x in reviews_sheet.worksheet(tab_name).col_values(3)
+                    for x in reviews_sheet.worksheet(tab_name).col_values(col_index)
                     if str(x).strip()
                 )
             except gspread.exceptions.WorksheetNotFound:
@@ -288,7 +288,7 @@ def run_appliance_workflow_crm(csv_file):
         ordered_df = pd.DataFrame(columns=df.columns)
     ordered_df = ordered_df.fillna("")
     if removed_rows:
-        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem tabs.")
+        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem/Gleb tabs.")
     progress.progress(60)
 
     # ── 7. Create Google Sheet ───────────────────
@@ -559,11 +559,11 @@ def run_usa_housecall(csv_file):
             if str(x).strip()
         }
         removal_invoices = set()
-        for tab_name in ["Zakaria", "Dio", "Jacob", "Artem"]:
+        for tab_name, col_index in [("Zakaria", 2), ("Dio", 3), ("Jacob", 3), ("Artem", 3), ("Gleb", 3)]:
             try:
                 removal_invoices.update(
                     str(x).strip()
-                    for x in reviews_sheet.worksheet(tab_name).col_values(3)
+                    for x in reviews_sheet.worksheet(tab_name).col_values(col_index)
                     if str(x).strip()
                 )
             except gspread.exceptions.WorksheetNotFound:
@@ -598,7 +598,7 @@ def run_usa_housecall(csv_file):
         ordered_df = pd.DataFrame(columns=OUTPUT_COLS)
     ordered_df = ordered_df.fillna("")
     if removed_rows:
-        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem tabs.")
+        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem/Gleb tabs.")
     progress.progress(60)
 
     # ── 7. Create Google Sheet ───────────────────
