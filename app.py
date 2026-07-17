@@ -159,6 +159,21 @@ def build_workflow_crm_columns(df: pd.DataFrame):
     return required_cols, selected_cols
 
 
+def build_plumbing_workflow_crm_columns(df: pd.DataFrame):
+    """Return Plumbing Workflow CRM source columns and final output columns."""
+    required_cols, selected_cols = build_workflow_crm_columns(df)
+    required_cols = required_cols + ["Saved Card"]
+    selected_cols = selected_cols + ["Saved Card"]
+    excluded_output_cols = {
+        "Payment Status",
+        "Technicians",
+        "Phone Number",
+        "Payment Amount",
+    }
+    output_cols = [col for col in selected_cols if col not in excluded_output_cols]
+    return required_cols, selected_cols, output_cols
+
+
 def load_plumbing_review_invoice_map(client, status=None):
     """Load plumbing review invoices and map them to the first tab where they appear."""
     reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
@@ -357,7 +372,7 @@ def run_plumbing_workflow_crm(csv_file):
     df = pd.read_csv(csv_file)
     progress.progress(10)
 
-    required_cols, selected_cols = build_workflow_crm_columns(df)
+    required_cols, selected_cols, output_cols = build_plumbing_workflow_crm_columns(df)
 
     # ── 2. Validate columns ──────────────────────
     missing = [c for c in required_cols if c not in df.columns]
@@ -417,7 +432,7 @@ def run_plumbing_workflow_crm(csv_file):
     progress.progress(60)
 
     # ── 7. Build output ──────────────────────────
-    final_cols = list(df.columns) + ["Found On"]
+    final_cols = output_cols + ["Found On"]
     ordered_df = pd.DataFrame(regular_no_due + regular_due + duplicate_rows)
     if not ordered_df.empty:
         ordered_df = ordered_df[final_cols]
