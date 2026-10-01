@@ -174,6 +174,56 @@ def build_plumbing_workflow_crm_columns(df: pd.DataFrame):
     return required_cols, selected_cols, output_cols
 
 
+def normalize_workflow_job_value(value) -> str:
+    """Normalize a Workflow CRM job identifier component for sheet matching."""
+    if value is None or pd.isna(value):
+        return ""
+    return " ".join(str(value).split()).casefold()
+
+
+def workflow_job_key(invoice_id, client_name):
+    """Return a match key only when both invoice ID and client name are present."""
+    invoice = normalize_workflow_job_value(invoice_id)
+    client = normalize_workflow_job_value(client_name)
+    return (invoice, client) if invoice and client else None
+
+
+def load_workflow_review_job_keys(client, status=None):
+    """Load GOOD REVIEWS jobs keyed by invoice ID plus client name."""
+    reviews_sheet = client.open("🟢GOOD REVIEWS")
+
+    def get_tab_job_keys(tab_name, invoice_col_index):
+        rows = reviews_sheet.worksheet(tab_name).get_all_values()
+        return {
+            key
+            for row in rows
+            if len(row) >= invoice_col_index
+            for name_col_index, value in enumerate(row, start=1)
+            if name_col_index != invoice_col_index
+            for key in [workflow_job_key(row[invoice_col_index - 1], value)]
+            if key is not None
+        }
+
+    yellow_jobs = get_tab_job_keys("Oleksandr Leoshko", 3)
+    orange_jobs = get_tab_job_keys("Eugene Yuskov", 3)
+    removal_jobs = set()
+
+    for tab_name, invoice_col_index in [
+        ("Zakaria", 2),
+        ("Dio", 3),
+        ("Jacob", 3),
+        ("Artem", 3),
+        ("Gleb", 3),
+    ]:
+        try:
+            removal_jobs.update(get_tab_job_keys(tab_name, invoice_col_index))
+        except gspread.exceptions.WorksheetNotFound:
+            if status is not None:
+                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
+
+    return yellow_jobs, orange_jobs, removal_jobs
+
+
 def load_plumbing_review_invoice_map(client, status=None):
     """Load plumbing review invoices and map them to the first tab where they appear."""
     reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
@@ -348,6 +398,137 @@ def run_appliance_workflow_crm(csv_file):
     progress.progress(90)
 
     # ── 10. Share ─────────────────────────────────
+    status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
+    progress.progress(100)
+
+    url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
+    status.update(label="✅ Report complete!", state="complete", expanded=False)
+    return url
+
+
+def run_usa_workflow_crm(csv_file):
+    """Create a USA Workflow CRM report using invoice ID plus client name matching."""
+    status = st.status("Running USA Workflow CRM report…", expanded=True)
+    progress = st.progress(0)
+
+    status.write("📂 Reading CSV…")
+    df = pd.read_csv(csv_file)
+    progress.progress(10)
+
+    required_cols, selected_cols = build_workflow_crm_columns(df)
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"❌ Missing columns in CSV: {missing}")
+        return None
+
+    df = df[selected_cols].copy()
+    status.write("✅ Columns validated.")
+    progress.progress(20)
+
+    df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
+    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+
+    # Invoice IDs overlap with Appliance Workflow CRM, so retain distinct clients.
+    job_keys = df.apply(
+        lambda row: workflow_job_key(row["Invoice ID"], row["Client"]), axis=1
+    )
+    before_dedup = len(df)
+    df = df.loc[~job_keys.duplicated()].copy()
+    dupes_removed = before_dedup - len(df)
+    status.write(
+        f"✅ Filtered to {len(df)} rows (Payment Amount > 0, "
+        f"{dupes_removed} duplicate jobs removed)."
+    )
+    progress.progress(30)
+
+    status.write("🔑 Connecting to Google Sheets…")
+    try:
+        client = get_gspread_client()
+    except Exception as e:
+        st.error(f"❌ Google auth failed: {e}")
+        return None
+    progress.progress(40)
+
+    status.write("📋 Loading review jobs…")
+    try:
+        yellow_jobs, orange_jobs, removal_jobs = load_workflow_review_job_keys(
+            client, status
+        )
+    except Exception as e:
+        st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
+        return None
+    progress.progress(50)
+
+    status.write("🔀 Categorizing rows…")
+    regular_no_due, regular_due, yellow_rows, orange_rows = [], [], [], []
+    removed_rows = 0
+
+    for _, row in df.iterrows():
+        job_key = workflow_job_key(row["Invoice ID"], row["Client"])
+        outstanding = money_to_float(row["Outstanding Balance"])
+
+        if job_key in removal_jobs:
+            removed_rows += 1
+            continue
+        if job_key in yellow_jobs:
+            yellow_rows.append(row)
+        elif job_key in orange_jobs:
+            orange_rows.append(row)
+        elif outstanding > 0:
+            regular_due.append(row)
+        else:
+            regular_no_due.append(row)
+
+    ordered_df = pd.DataFrame(regular_no_due + regular_due + yellow_rows + orange_rows)
+    if not ordered_df.empty:
+        ordered_df = ordered_df[df.columns]
+    else:
+        ordered_df = pd.DataFrame(columns=df.columns)
+    ordered_df = ordered_df.fillna("")
+    if removed_rows:
+        status.write(
+            "   Removed "
+            f"{removed_rows} job(s) found on Zakaria/Dio/Jacob/Artem/Gleb tabs."
+        )
+    progress.progress(60)
+
+    yesterday = get_yesterday_str()
+    sheet_name = f"USA WF {yesterday} automated"
+    status.write(f"📝 Creating sheet: {sheet_name}")
+    sh = client.create(sheet_name, folder_id=FOLDER_ID)
+    worksheet = sh.get_worksheet(0)
+    progress.progress(70)
+
+    status.write("⬆️ Uploading data…")
+    worksheet.update(dataframe_to_worksheet_payload(ordered_df))
+    progress.progress(80)
+
+    status.write("🎨 Applying formatting…")
+    num_cols = len(ordered_df.columns)
+    last_col = chr(ord("A") + num_cols - 1)
+    start_yellow = len(regular_no_due) + len(regular_due) + 2
+    end_yellow = start_yellow + len(yellow_rows)
+    start_orange = end_yellow
+    end_orange = start_orange + len(orange_rows)
+
+    formats = []
+    if yellow_rows:
+        formats.append({
+            "range": f"A{start_yellow}:{last_col}{end_yellow - 1}",
+            "format": {"backgroundColor": {"red": 1, "green": 1, "blue": 0}},
+        })
+    if orange_rows:
+        formats.append({
+            "range": f"A{start_orange}:{last_col}{end_orange - 1}",
+            "format": {"backgroundColor": {"red": 1, "green": 0.6, "blue": 0}},
+        })
+    if formats:
+        worksheet.batch_format(formats)
+
+    apply_standard_formatting(sh, worksheet, num_cols)
+    progress.progress(90)
+
     status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
     sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
@@ -852,10 +1033,11 @@ def run_plumbing_titan_old(xlsx_file):
 
 
 # ══════════════════════════════════════════════
-# MAIN UI — Four Tabs
+# MAIN UI — Five Tabs
 # ══════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔧 Appliance Workflow CRM",
+    "🇺🇸 USA Workflow CRM",
     "🇺🇸 USA (Housecall)",
     "🛠️ Plumbing Workflow CRM",
     "🚿 Plumbing Titan Old",
@@ -876,38 +1058,53 @@ with tab1:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 2: USA (Housecall) ───────────────────
+# ── Tab 2: USA Workflow CRM ──────────────────
 with tab2:
-    st.subheader("USA (Housecall)")
-    st.caption("Housecall Pro CRM — upload CSV export")
-    csv_file_2 = st.file_uploader("Upload CSV file", type=["csv"], key="usa_csv")
+    st.subheader("USA Workflow CRM")
+    st.caption("USA Workflow CRM — upload CSV export")
+    csv_file_2 = st.file_uploader("Upload CSV file", type=["csv"], key="usa_workflow_csv")
 
-    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_usa"):
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_usa_workflow"):
         if csv_file_2 is None:
             st.warning("Please upload a CSV file first.")
         else:
-            url = run_usa_housecall(csv_file_2)
+            url = run_usa_workflow_crm(csv_file_2)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 3: Plumbing Workflow CRM ────────────
+# ── Tab 3: USA (Housecall) ───────────────────
 with tab3:
-    st.subheader("Plumbing Workflow CRM")
-    st.caption("Upload CSV from Plumbing Workflow CRM — invoices already present in plumbing reviews will be removed")
-    csv_file_3 = st.file_uploader("Upload CSV file", type=["csv"], key="plumbing_workflow_csv")
+    st.subheader("USA (Housecall)")
+    st.caption("Housecall Pro CRM — upload CSV export")
+    csv_file_3 = st.file_uploader("Upload CSV file", type=["csv"], key="usa_csv")
 
-    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing_workflow"):
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_usa"):
         if csv_file_3 is None:
             st.warning("Please upload a CSV file first.")
         else:
-            url = run_plumbing_workflow_crm(csv_file_3)
+            url = run_usa_housecall(csv_file_3)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 4: Plumbing Titan Old ───────────────
+# ── Tab 4: Plumbing Workflow CRM ────────────
 with tab4:
+    st.subheader("Plumbing Workflow CRM")
+    st.caption("Upload CSV from Plumbing Workflow CRM — invoices already present in plumbing reviews will be removed")
+    csv_file_4 = st.file_uploader("Upload CSV file", type=["csv"], key="plumbing_workflow_csv")
+
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing_workflow"):
+        if csv_file_4 is None:
+            st.warning("Please upload a CSV file first.")
+        else:
+            url = run_plumbing_workflow_crm(csv_file_4)
+            if url:
+                st.success("Report generated successfully!")
+                st.markdown(f"### [📄 Open Google Sheet]({url})")
+
+# ── Tab 5: Plumbing Titan Old ───────────────
+with tab5:
     st.subheader("Plumbing Titan Old")
     st.caption("Upload XLSX export — duplicate invoices will be highlighted in dark red")
     xlsx_file = st.file_uploader("Upload XLSX file", type=["xlsx"], key="plumbing_titan_old_xlsx")
