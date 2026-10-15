@@ -249,6 +249,21 @@ def load_plumbing_review_invoice_map(client, status=None):
     return invoice_to_tab
 
 
+def load_sparky_review_job_keys(client, status=None):
+    """Load Sparky review jobs keyed by client name and job number."""
+    reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
+    rows = reviews_sheet.worksheet("Sparky").get_all_values()
+    job_keys = {
+        workflow_job_key(row[3], row[2])
+        for row in rows[1:]
+        if len(row) >= 4
+        if workflow_job_key(row[3], row[2]) is not None
+    }
+    if status is not None:
+        status.write(f"   ✅ Sparky: {len(job_keys)} jobs loaded")
+    return job_keys
+
+
 def run_appliance_workflow_crm(csv_file):
     """
     Original Ontario/Alberta pipeline — same logic as before.
@@ -256,7 +271,7 @@ def run_appliance_workflow_crm(csv_file):
     🟢GOOD REVIEWS sheet, colors yellow/orange, uploads to Google Sheets.
     """
 
-    status = st.status("Running Appliance Workflow CRM report…", expanded=True)
+    status = st.status("Running Appliance WF CRM report…", expanded=True)
     progress = st.progress(0)
 
     # ── 1. Read CSV ──────────────────────────────
@@ -409,7 +424,7 @@ def run_appliance_workflow_crm(csv_file):
 
 def run_usa_workflow_crm(csv_file):
     """Create a USA Workflow CRM report using invoice ID plus client name matching."""
-    status = st.status("Running USA Workflow CRM report…", expanded=True)
+    status = st.status("Running USA WF CRM report…", expanded=True)
     progress = st.progress(0)
 
     status.write("📂 Reading CSV…")
@@ -545,7 +560,7 @@ def run_plumbing_workflow_crm(csv_file):
     invoice already found in the plumbing review spreadsheet before upload.
     """
 
-    status = st.status("Running Plumbing Workflow CRM report…", expanded=True)
+    status = st.status("Running Plumbing WF CRM report…", expanded=True)
     progress = st.progress(0)
 
     # ── 1. Read CSV ──────────────────────────────
@@ -666,6 +681,127 @@ def run_plumbing_workflow_crm(csv_file):
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
     status.update(label="✅ Report complete!", state="complete", expanded=False)
+    return url
+
+
+def run_sparky(csv_file):
+    """Create a Sparky Workflow CRM report and flag reviewed jobs."""
+    status = st.status("Running Sparky report…", expanded=True)
+    progress = st.progress(0)
+
+    status.write("📂 Reading CSV…")
+    df = pd.read_csv(csv_file)
+    progress.progress(10)
+
+    required_cols, selected_cols, output_cols = build_plumbing_workflow_crm_columns(df)
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"❌ Missing columns in CSV: {missing}")
+        return None
+
+    df = df[selected_cols].copy()
+    status.write("✅ Columns validated.")
+    progress.progress(20)
+
+    df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
+    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+
+    before_dedup = len(df)
+    df = df.drop_duplicates(subset=["Invoice ID"], keep="first")
+    dupes_removed = before_dedup - len(df)
+    status.write(
+        f"✅ Filtered to {len(df)} rows (Payment Amount > 0, "
+        f"{dupes_removed} duplicate invoices removed)."
+    )
+    progress.progress(30)
+
+    status.write("🔑 Connecting to Google Sheets…")
+    try:
+        client = get_gspread_client()
+    except Exception as e:
+        st.error(f"❌ Google auth failed: {e}")
+        return None
+    progress.progress(40)
+
+    status.write("📋 Loading Sparky review jobs…")
+    try:
+        sparky_job_keys = load_sparky_review_job_keys(client, status)
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("❌ Could not find the 'Sparky' tab in Plumbing Reviews and Plans.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Could not read Plumbing Reviews and Plans: {e}")
+        return None
+    progress.progress(50)
+
+    status.write("🔀 Reordering rows (reviewed jobs → bottom)…")
+    regular_no_due, regular_due, duplicate_rows = [], [], []
+    for _, row in df.iterrows():
+        job_key = workflow_job_key(row["Invoice ID"], row["Client"])
+        outstanding = money_to_float(row["Outstanding Balance"])
+        row_copy = row.copy()
+
+        if job_key in sparky_job_keys:
+            row_copy["Found On"] = "Sparky"
+            duplicate_rows.append(row_copy)
+        elif outstanding > 0:
+            row_copy["Found On"] = ""
+            regular_due.append(row_copy)
+        else:
+            row_copy["Found On"] = ""
+            regular_no_due.append(row_copy)
+    progress.progress(60)
+
+    final_cols = output_cols + ["Found On"]
+    ordered_df = pd.DataFrame(regular_no_due + regular_due + duplicate_rows)
+    if not ordered_df.empty:
+        ordered_df = ordered_df[final_cols]
+    else:
+        ordered_df = pd.DataFrame(columns=final_cols)
+    ordered_df = ordered_df.fillna("")
+    status.write(
+        f"   {len(regular_no_due) + len(regular_due)} clean rows + "
+        f"{len(duplicate_rows)} reviewed job(s)."
+    )
+    progress.progress(70)
+
+    yesterday = get_yesterday_str()
+    sheet_name = f"Sparky {yesterday} automated"
+    status.write(f"📝 Creating sheet: {sheet_name}")
+    sh = client.create(sheet_name, folder_id=FOLDER_ID)
+    worksheet = sh.get_worksheet(0)
+    progress.progress(80)
+
+    status.write("⬆️ Uploading data…")
+    worksheet.update(dataframe_to_worksheet_payload(ordered_df))
+    progress.progress(90)
+
+    status.write("🎨 Applying formatting…")
+    num_cols = len(ordered_df.columns)
+    last_col = chr(ord("A") + num_cols - 1)
+    if duplicate_rows:
+        start_dupes = len(regular_no_due) + len(regular_due) + 2
+        end_dupes = start_dupes + len(duplicate_rows) - 1
+        worksheet.batch_format([{
+            "range": f"A{start_dupes}:{last_col}{end_dupes}",
+            "format": {
+                "backgroundColor": {"red": 0.6, "green": 0, "blue": 0},
+                "textFormat": {
+                    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                },
+            },
+        }])
+
+    apply_standard_formatting(sh, worksheet, num_cols)
+    progress.progress(95)
+
+    for email in [SHARE_EMAIL, "alina.tryncha@workflow.com.ua"]:
+        status.write(f"🔗 Sharing with {email}…")
+        sh.share(email, perm_type="user", role="writer", notify="false")
+    progress.progress(100)
+
+    url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
+    status.update(label="✅ Sparky report complete!", state="complete", expanded=False)
     return url
 
 
@@ -1033,20 +1169,21 @@ def run_plumbing_titan_old(xlsx_file):
 
 
 # ══════════════════════════════════════════════
-# MAIN UI — Five Tabs
+# MAIN UI — Six Tabs
 # ══════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔧 Appliance Workflow CRM",
-    "🇺🇸 USA Workflow CRM",
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🔧 Appliance WF CRM",
+    "🇺🇸 USA WF CRM",
     "🇺🇸 USA (Housecall)",
-    "🛠️ Plumbing Workflow CRM",
+    "🛠️ Plumbing WF CRM",
+    "Sparky WF CRM",
     "🚿 Plumbing Titan Old",
 ])
 
-# ── Tab 1: Appliance Workflow CRM ───────────
+# ── Tab 1: Appliance WF CRM ──────────────────
 with tab1:
-    st.subheader("Appliance Workflow CRM")
-    st.caption("Ontario & Alberta — upload CSV from Appliance Workflow CRM")
+    st.subheader("Appliance WF CRM")
+    st.caption("Ontario & Alberta — upload CSV from Appliance WF CRM")
     csv_file_1 = st.file_uploader("Upload CSV file", type=["csv"], key="workflow_csv")
 
     if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_workflow"):
@@ -1058,10 +1195,10 @@ with tab1:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 2: USA Workflow CRM ──────────────────
+# ── Tab 2: USA WF CRM ────────────────────────
 with tab2:
-    st.subheader("USA Workflow CRM")
-    st.caption("USA Workflow CRM — upload CSV export")
+    st.subheader("USA WF CRM")
+    st.caption("USA WF CRM — upload CSV export")
     csv_file_2 = st.file_uploader("Upload CSV file", type=["csv"], key="usa_workflow_csv")
 
     if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_usa_workflow"):
@@ -1088,10 +1225,10 @@ with tab3:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 4: Plumbing Workflow CRM ────────────
+# ── Tab 4: Plumbing WF CRM ───────────────────
 with tab4:
-    st.subheader("Plumbing Workflow CRM")
-    st.caption("Upload CSV from Plumbing Workflow CRM — invoices already present in plumbing reviews will be removed")
+    st.subheader("Plumbing WF CRM")
+    st.caption("Upload CSV from Plumbing WF CRM — reviewed invoices appear in dark red")
     csv_file_4 = st.file_uploader("Upload CSV file", type=["csv"], key="plumbing_workflow_csv")
 
     if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_plumbing_workflow"):
@@ -1103,8 +1240,23 @@ with tab4:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
 
-# ── Tab 5: Plumbing Titan Old ───────────────
+# ── Tab 5: Sparky WF CRM ─────────────────────
 with tab5:
+    st.subheader("Sparky WF CRM")
+    st.caption("Upload CSV from Sparky WF CRM — reviewed jobs appear in dark red")
+    csv_file_5 = st.file_uploader("Upload CSV file", type=["csv"], key="sparky_csv")
+
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_sparky"):
+        if csv_file_5 is None:
+            st.warning("Please upload a CSV file first.")
+        else:
+            url = run_sparky(csv_file_5)
+            if url:
+                st.success("Report generated successfully!")
+                st.markdown(f"### [📄 Open Google Sheet]({url})")
+
+# ── Tab 6: Plumbing Titan Old ───────────────
+with tab6:
     st.subheader("Plumbing Titan Old")
     st.caption("Upload XLSX export — duplicate invoices will be highlighted in dark red")
     xlsx_file = st.file_uploader("Upload XLSX file", type=["xlsx"], key="plumbing_titan_old_xlsx")
