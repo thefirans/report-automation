@@ -674,9 +674,8 @@ def run_plumbing_workflow_crm(csv_file):
     progress.progress(95)
 
     # ── 11. Share ────────────────────────────────
-    for email in [SHARE_EMAIL, "alina.tryncha@workflow.com.ua"]:
-        status.write(f"🔗 Sharing with {email}…")
-        sh.share(email, perm_type="user", role="writer", notify="false")
+    status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -795,9 +794,8 @@ def run_sparky(csv_file):
     apply_standard_formatting(sh, worksheet, num_cols)
     progress.progress(95)
 
-    for email in [SHARE_EMAIL, "alina.tryncha@workflow.com.ua"]:
-        status.write(f"🔗 Sharing with {email}…")
-        sh.share(email, perm_type="user", role="writer", notify="false")
+    status.write(f"🔗 Sharing with {SHARE_EMAIL}…")
+    sh.share(SHARE_EMAIL, perm_type="user", role="writer", notify="false")
     progress.progress(100)
 
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
@@ -992,16 +990,15 @@ PLUMBING_REVIEWS_SHEET_ID = "1HImgvjKQHGYMARHIpMJOf0961Urpbkq5zGrVpAkQAOU"
 
 PLUMBING_SHARE_EMAILS = [
     "yuskov.y@workflow.com.ua",
-    "alina.tryncha@workflow.com.ua",
     "oleksandr.leoshko@workflow.com.ua",
 ]
 
-# Review tabs inside the plumbing reviews sheet + which column has Invoice Number
-# Format: (tab_name, column_index)  — column 3 = column C
+# Review tabs inside the plumbing reviews sheet + which column has Invoice Number.
+# Column indexes are one-based: A=1, B=2, C=3, D=4.
 PLUMBING_REVIEW_TABS = [
-    ("Alina", 1),       # column C
-    ("Alex", 3),        # column C
-    ("Eugene", 2) # column C
+    ("Alina", 1),       # column A
+    ("Alex", 4),        # column D
+    ("Eugene", 2),      # column B
 ]
 
 
