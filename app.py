@@ -43,6 +43,24 @@ def money_to_float(x) -> float:
         return 0.0
 
 
+def normalize_invoice_number(value) -> str:
+    """Normalize CRM and spreadsheet invoice values for reliable matching."""
+    if value is None or pd.isna(value):
+        return ""
+
+    invoice = str(value).strip()
+    if invoice.startswith("="):
+        invoice = invoice[1:].strip()
+        if len(invoice) >= 2 and invoice[0] == invoice[-1] and invoice[0] in {'"', "'"}:
+            invoice = invoice[1:-1]
+
+    # Excel may deserialize whole-number invoice IDs as e.g. "26116032.0".
+    whole, separator, fraction = invoice.strip().partition(".")
+    if separator and whole.isdigit() and fraction and set(fraction) == {"0"}:
+        return whole
+    return invoice.strip()
+
+
 def get_yesterday_str() -> str:
     """Returns yesterday's date as DD.MM"""
     return (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%d.%m")
@@ -183,7 +201,7 @@ def normalize_workflow_job_value(value) -> str:
 
 def workflow_job_key(invoice_id, client_name):
     """Return a match key only when both invoice ID and client name are present."""
-    invoice = normalize_workflow_job_value(invoice_id)
+    invoice = normalize_invoice_number(invoice_id).casefold()
     client = normalize_workflow_job_value(client_name)
     return (invoice, client) if invoice and client else None
 
@@ -233,9 +251,10 @@ def load_plumbing_review_invoice_map(client, status=None):
         try:
             ws = reviews_sheet.worksheet(tab_name)
             tab_invoices = [
-                str(x).strip()
+                invoice
                 for x in ws.col_values(col_index)
-                if str(x).strip()
+                for invoice in [normalize_invoice_number(x)]
+                if invoice
             ]
             for inv in tab_invoices:
                 if inv not in invoice_to_tab:
@@ -293,7 +312,7 @@ def run_appliance_workflow_crm(csv_file):
 
     # ── 3. Filter: Payment Amount > 0 ────────────
     df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
-    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+    df["Invoice ID"] = df["Invoice ID"].apply(normalize_invoice_number)
 
     # Remove duplicate Invoice IDs (keep first occurrence only)
     before_dedup = len(df)
@@ -316,22 +335,22 @@ def run_appliance_workflow_crm(csv_file):
     try:
         reviews_sheet = client.open("🟢GOOD REVIEWS")
         alex_invoices = {
-            str(x).strip()
+            normalize_invoice_number(x)
             for x in reviews_sheet.worksheet("Oleksandr Leoshko").col_values(3)
-            if str(x).strip()
+            if normalize_invoice_number(x)
         }
         eugene_invoices = {
-            str(x).strip()
+            normalize_invoice_number(x)
             for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
-            if str(x).strip()
+            if normalize_invoice_number(x)
         }
         removal_invoices = set()
         for tab_name, col_index in [("Zakaria", 2), ("Dio", 3), ("Jacob", 3), ("Artem", 3), ("Gleb", 3)]:
             try:
                 removal_invoices.update(
-                    str(x).strip()
+                    normalize_invoice_number(x)
                     for x in reviews_sheet.worksheet(tab_name).col_values(col_index)
-                    if str(x).strip()
+                    if normalize_invoice_number(x)
                 )
             except gspread.exceptions.WorksheetNotFound:
                 status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
@@ -346,7 +365,7 @@ def run_appliance_workflow_crm(csv_file):
     removed_rows = 0
 
     for _, row in df.iterrows():
-        inv = str(row["Invoice ID"]).strip()
+        inv = normalize_invoice_number(row["Invoice ID"])
         outstanding = money_to_float(row["Outstanding Balance"])
 
         if inv in removal_invoices:
@@ -442,7 +461,7 @@ def run_usa_workflow_crm(csv_file):
     progress.progress(20)
 
     df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
-    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+    df["Invoice ID"] = df["Invoice ID"].apply(normalize_invoice_number)
 
     # Invoice IDs overlap with Appliance Workflow CRM, so retain distinct clients.
     job_keys = df.apply(
@@ -582,7 +601,7 @@ def run_plumbing_workflow_crm(csv_file):
 
     # ── 3. Filter: Payment Amount > 0 ────────────
     df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
-    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+    df["Invoice ID"] = df["Invoice ID"].apply(normalize_invoice_number)
 
     before_dedup = len(df)
     df = df.drop_duplicates(subset=["Invoice ID"], keep="first")
@@ -612,7 +631,7 @@ def run_plumbing_workflow_crm(csv_file):
     status.write("🔀 Reordering rows (duplicates → bottom)…")
     regular_no_due, regular_due, duplicate_rows = [], [], []
     for _, row in df.iterrows():
-        inv = str(row["Invoice ID"]).strip()
+        inv = normalize_invoice_number(row["Invoice ID"])
         outstanding = money_to_float(row["Outstanding Balance"])
 
         row_copy = row.copy()
@@ -703,7 +722,7 @@ def run_sparky(csv_file):
     progress.progress(20)
 
     df = df[df["Payment Amount"].apply(money_to_float) > 0].copy()
-    df["Invoice ID"] = df["Invoice ID"].astype(str).str.strip()
+    df["Invoice ID"] = df["Invoice ID"].apply(normalize_invoice_number)
 
     before_dedup = len(df)
     df = df.drop_duplicates(subset=["Invoice ID"], keep="first")
@@ -856,7 +875,7 @@ def run_usa_housecall(csv_file):
     )
 
     final_df = df_clean[OUTPUT_COLS].copy()
-    final_df["Invoice Number"] = final_df["Invoice Number"].astype(str).str.strip()
+    final_df["Invoice Number"] = final_df["Invoice Number"].apply(normalize_invoice_number)
 
     # Remove duplicate Invoice Numbers (keep first occurrence only)
     before_dedup = len(final_df)
@@ -879,22 +898,22 @@ def run_usa_housecall(csv_file):
     try:
         reviews_sheet = client.open("🟢GOOD REVIEWS")
         alex_invoices = {
-            str(x).strip()
+            normalize_invoice_number(x)
             for x in reviews_sheet.worksheet("Oleksandr Leoshko").col_values(3)
-            if str(x).strip()
+            if normalize_invoice_number(x)
         }
         eugene_invoices = {
-            str(x).strip()
+            normalize_invoice_number(x)
             for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
-            if str(x).strip()
+            if normalize_invoice_number(x)
         }
         removal_invoices = set()
         for tab_name, col_index in [("Zakaria", 2), ("Dio", 3), ("Jacob", 3), ("Artem", 3), ("Gleb", 3)]:
             try:
                 removal_invoices.update(
-                    str(x).strip()
+                    normalize_invoice_number(x)
                     for x in reviews_sheet.worksheet(tab_name).col_values(col_index)
-                    if str(x).strip()
+                    if normalize_invoice_number(x)
                 )
             except gspread.exceptions.WorksheetNotFound:
                 status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
@@ -909,7 +928,7 @@ def run_usa_housecall(csv_file):
     removed_rows = 0
 
     for _, row in final_df.iterrows():
-        inv_num = str(row["Invoice Number"]).strip()
+        inv_num = normalize_invoice_number(row["Invoice Number"])
 
         if inv_num in removal_invoices:
             removed_rows += 1
@@ -1040,13 +1059,7 @@ def run_plumbing_titan_old(xlsx_file):
 
     df = df[OUTPUT_COLS].copy()
 
-    # Fix Invoice Number: remove trailing .0 (Excel reads integers as floats)
-    df["Invoice Number"] = (
-        df["Invoice Number"]
-        .astype(str)
-        .str.strip()
-        .str.replace(r"\.0$", "", regex=True)
-    )
+    df["Invoice Number"] = df["Invoice Number"].apply(normalize_invoice_number)
     df = df.fillna("")
 
     # Remove duplicate Invoice Numbers (keep first occurrence only)
@@ -1101,7 +1114,7 @@ def run_plumbing_titan_old(xlsx_file):
     duplicate_rows = []
 
     for _, row in df.iterrows():
-        inv_num = str(row["Invoice Number"]).strip()
+        inv_num = normalize_invoice_number(row["Invoice Number"])
         if inv_num and inv_num in invoice_to_tab:
             row_copy = row.copy()
             row_copy["Found On"] = invoice_to_tab[inv_num]
