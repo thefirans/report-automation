@@ -43,22 +43,37 @@ def money_to_float(x) -> float:
         return 0.0
 
 
-def normalize_invoice_number(value) -> str:
-    """Normalize CRM and spreadsheet invoice values for reliable matching."""
+def normalize_crm_export_text(value) -> str:
+    """Remove CRM formula wrappers from a text value while preserving its content."""
     if value is None or pd.isna(value):
         return ""
 
-    invoice = str(value).strip()
-    if invoice.startswith("="):
-        invoice = invoice[1:].strip()
-        if len(invoice) >= 2 and invoice[0] == invoice[-1] and invoice[0] in {'"', "'"}:
-            invoice = invoice[1:-1]
+    text = str(value).strip()
+    if text.startswith("="):
+        text = text[1:].strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+            text = text[1:-1]
+    return text.strip()
+
+
+def normalize_invoice_number(value) -> str:
+    """Normalize CRM and spreadsheet invoice values for reliable matching."""
+    invoice = normalize_crm_export_text(value)
 
     # Excel may deserialize whole-number invoice IDs as e.g. "26116032.0".
     whole, separator, fraction = invoice.strip().partition(".")
     if separator and whole.isdigit() and fraction and set(fraction) == {"0"}:
         return whole
     return invoice.strip()
+
+
+def normalize_phone_numbers(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep digits only in phone numbers when the source has that column."""
+    if "Phone Number" in df.columns:
+        df["Phone Number"] = df["Phone Number"].apply(
+            lambda value: "".join(char for char in normalize_crm_export_text(value) if char.isdigit())
+        )
+    return df
 
 
 def get_yesterday_str() -> str:
@@ -306,7 +321,7 @@ def run_appliance_workflow_crm(csv_file):
         st.error(f"❌ Missing columns in CSV: {missing}")
         return None
 
-    df = df[selected_cols].copy()
+    df = normalize_phone_numbers(df[selected_cols].copy())
     status.write("✅ Columns validated.")
     progress.progress(20)
 
@@ -456,7 +471,7 @@ def run_usa_workflow_crm(csv_file):
         st.error(f"❌ Missing columns in CSV: {missing}")
         return None
 
-    df = df[selected_cols].copy()
+    df = normalize_phone_numbers(df[selected_cols].copy())
     status.write("✅ Columns validated.")
     progress.progress(20)
 
@@ -595,7 +610,7 @@ def run_plumbing_workflow_crm(csv_file):
         st.error(f"❌ Missing columns in CSV: {missing}")
         return None
 
-    df = df[selected_cols].copy()
+    df = normalize_phone_numbers(df[selected_cols].copy())
     status.write("✅ Columns validated.")
     progress.progress(20)
 
@@ -717,7 +732,7 @@ def run_sparky(csv_file):
         st.error(f"❌ Missing columns in CSV: {missing}")
         return None
 
-    df = df[selected_cols].copy()
+    df = normalize_phone_numbers(df[selected_cols].copy())
     status.write("✅ Columns validated.")
     progress.progress(20)
 
