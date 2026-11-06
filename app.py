@@ -1266,14 +1266,14 @@ def run_plumbing_titan_old(xlsx_file):
 # ══════════════════════════════════════════════
 # MAIN UI — Seven Tabs
 # ══════════════════════════════════════════════
-tab1, tab2, tab_au, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab_au = st.tabs([
     "🔧 Appliance WF CRM",
     "🇺🇸 USA WF CRM",
-    "🇦🇺Australia WF CRM",
     "🇺🇸 USA (Housecall)",
     "🛠️ Plumbing WF CRM",
     "Sparky WF CRM",
     "🚿 Plumbing Titan Old",
+    "🇦🇺Australia WF CRM",
 ])
 
 # ── Tab 1: Appliance WF CRM ──────────────────
@@ -1302,21 +1302,6 @@ with tab2:
             st.warning("Please upload a CSV file first.")
         else:
             url = run_usa_workflow_crm(csv_file_2)
-            if url:
-                st.success("Report generated successfully!")
-                st.markdown(f"### [📄 Open Google Sheet]({url})")
-
-# ── Tab: Australia WF CRM ────────────────────
-with tab_au:
-    st.subheader("Australia WF CRM")
-    st.caption("Australia WF CRM — upload CSV export; jobs on the GOOD REVIEWS 'Australia' tab appear in dark red")
-    csv_file_au = st.file_uploader("Upload CSV file", type=["csv"], key="australia_workflow_csv")
-
-    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_australia_workflow"):
-        if csv_file_au is None:
-            st.warning("Please upload a CSV file first.")
-        else:
-            url = run_australia_workflow_crm(csv_file_au)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
@@ -1377,6 +1362,21 @@ with tab6:
             st.warning("Please upload an XLSX file first.")
         else:
             url = run_plumbing_titan_old(xlsx_file)
+            if url:
+                st.success("Report generated successfully!")
+                st.markdown(f"### [📄 Open Google Sheet]({url})")
+
+# ── Tab 7: Australia WF CRM ────────────────────
+with tab_au:
+    st.subheader("Australia WF CRM")
+    st.caption("Australia WF CRM — upload CSV export; jobs on the GOOD REVIEWS 'Australia' tab appear in dark red")
+    csv_file_au = st.file_uploader("Upload CSV file", type=["csv"], key="australia_workflow_csv")
+
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_australia_workflow"):
+        if csv_file_au is None:
+            st.warning("Please upload a CSV file first.")
+        else:
+            url = run_australia_workflow_crm(csv_file_au)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
