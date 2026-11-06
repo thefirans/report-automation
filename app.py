@@ -257,6 +257,21 @@ def load_workflow_review_job_keys(client, status=None):
     return yellow_jobs, orange_jobs, removal_jobs
 
 
+def load_good_reviews_region_job_keys(client, tab_name, client_col, invoice_col, status=None):
+    """Load jobs from a GOOD REVIEWS region tab using fixed 1-based client / invoice columns."""
+    rows = client.open("🟢GOOD REVIEWS").worksheet(tab_name).get_all_values()
+    job_keys = {
+        key
+        for row in rows
+        if len(row) >= max(client_col, invoice_col)
+        for key in [workflow_job_key(row[invoice_col - 1], row[client_col - 1])]
+        if key is not None
+    }
+    if status is not None:
+        status.write(f"   ✅ {tab_name}: {len(job_keys)} jobs loaded")
+    return job_keys
+
+
 def load_plumbing_review_invoice_map(client, status=None):
     """Load plumbing review invoices and map them to the first tab where they appear."""
     reviews_sheet = client.open_by_key(PLUMBING_REVIEWS_SHEET_ID)
@@ -456,9 +471,16 @@ def run_appliance_workflow_crm(csv_file):
     return url
 
 
-def run_usa_workflow_crm(csv_file):
-    """Create a USA Workflow CRM report using invoice ID plus client name matching."""
-    status = st.status("Running USA WF CRM report…", expanded=True)
+def run_review_matched_workflow_crm(csv_file, report_label, sheet_prefix, region_tab=None):
+    """
+    Create a Workflow CRM report using invoice ID plus client name matching
+    against 🟢GOOD REVIEWS. Shared by regional WF CRMs (USA, Australia) whose
+    invoice IDs can overlap with the Appliance Workflow CRM.
+
+    region_tab: optional (tab_name, client_col, invoice_col) in GOOD REVIEWS.
+    Jobs found there go to the bottom in dark red with a "Found On" column.
+    """
+    status = st.status(f"Running {report_label} report…", expanded=True)
     progress = st.progress(0)
 
     status.write("📂 Reading CSV…")
@@ -504,6 +526,15 @@ def run_usa_workflow_crm(csv_file):
         yellow_jobs, orange_jobs, removal_jobs = load_workflow_review_job_keys(
             client, status
         )
+        region_jobs = set()
+        if region_tab is not None:
+            region_tab_name, region_client_col, region_invoice_col = region_tab
+            region_jobs = load_good_reviews_region_job_keys(
+                client, region_tab_name, region_client_col, region_invoice_col, status
+            )
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"❌ Could not find the '{region_tab[0]}' tab in 🟢GOOD REVIEWS.")
+        return None
     except Exception as e:
         st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
         return None
@@ -511,6 +542,7 @@ def run_usa_workflow_crm(csv_file):
 
     status.write("🔀 Categorizing rows…")
     regular_no_due, regular_due, yellow_rows, orange_rows = [], [], [], []
+    region_rows = []
     removed_rows = 0
 
     for _, row in df.iterrows():
@@ -520,7 +552,9 @@ def run_usa_workflow_crm(csv_file):
         if job_key in removal_jobs:
             removed_rows += 1
             continue
-        if job_key in yellow_jobs:
+        if job_key in region_jobs:
+            region_rows.append(row)
+        elif job_key in yellow_jobs:
             yellow_rows.append(row)
         elif job_key in orange_jobs:
             orange_rows.append(row)
@@ -529,12 +563,20 @@ def run_usa_workflow_crm(csv_file):
         else:
             regular_no_due.append(row)
 
-    ordered_df = pd.DataFrame(regular_no_due + regular_due + yellow_rows + orange_rows)
+    final_cols = list(df.columns)
+    if region_tab is not None:
+        final_cols.append("Found On")
+    ordered_rows = regular_no_due + regular_due + yellow_rows + orange_rows + region_rows
+    ordered_df = pd.DataFrame(ordered_rows).reset_index(drop=True)
     if not ordered_df.empty:
-        ordered_df = ordered_df[df.columns]
+        if region_tab is not None:
+            ordered_df["Found On"] = [""] * (len(ordered_rows) - len(region_rows)) + [region_tab[0]] * len(region_rows)
+        ordered_df = ordered_df[final_cols]
     else:
-        ordered_df = pd.DataFrame(columns=df.columns)
+        ordered_df = pd.DataFrame(columns=final_cols)
     ordered_df = ordered_df.fillna("")
+    if region_rows:
+        status.write(f"   {len(region_rows)} job(s) found on {region_tab[0]} tab → dark red at bottom.")
     if removed_rows:
         status.write(
             "   Removed "
@@ -543,7 +585,7 @@ def run_usa_workflow_crm(csv_file):
     progress.progress(60)
 
     yesterday = get_yesterday_str()
-    sheet_name = f"USA WF {yesterday} automated"
+    sheet_name = f"{sheet_prefix} {yesterday} automated"
     status.write(f"📝 Creating sheet: {sheet_name}")
     sh = client.create(sheet_name, folder_id=FOLDER_ID)
     worksheet = sh.get_worksheet(0)
@@ -572,6 +614,18 @@ def run_usa_workflow_crm(csv_file):
             "range": f"A{start_orange}:{last_col}{end_orange - 1}",
             "format": {"backgroundColor": {"red": 1, "green": 0.6, "blue": 0}},
         })
+    if region_rows:
+        start_region = end_orange
+        end_region = start_region + len(region_rows)
+        formats.append({
+            "range": f"A{start_region}:{last_col}{end_region - 1}",
+            "format": {
+                "backgroundColor": {"red": 0.6, "green": 0, "blue": 0},
+                "textFormat": {
+                    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                },
+            },
+        })
     if formats:
         worksheet.batch_format(formats)
 
@@ -585,6 +639,22 @@ def run_usa_workflow_crm(csv_file):
     url = f"https://docs.google.com/spreadsheets/d/{sh.id}"
     status.update(label="✅ Report complete!", state="complete", expanded=False)
     return url
+
+
+def run_usa_workflow_crm(csv_file):
+    """Create a USA Workflow CRM report."""
+    return run_review_matched_workflow_crm(csv_file, "USA WF CRM", "USA WF")
+
+
+def run_australia_workflow_crm(csv_file):
+    """Create an Australia Workflow CRM report."""
+    return run_review_matched_workflow_crm(
+        csv_file,
+        "Australia WF CRM",
+        "Australia WF",
+        # GOOD REVIEWS "Australia" tab: client name in column C, invoice ID in column D.
+        region_tab=("Australia", 3, 4),
+    )
 
 
 def run_plumbing_workflow_crm(csv_file):
@@ -1194,11 +1264,12 @@ def run_plumbing_titan_old(xlsx_file):
 
 
 # ══════════════════════════════════════════════
-# MAIN UI — Six Tabs
+# MAIN UI — Seven Tabs
 # ══════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab_au, tab3, tab4, tab5, tab6 = st.tabs([
     "🔧 Appliance WF CRM",
     "🇺🇸 USA WF CRM",
+    "🇦🇺Australia WF CRM",
     "🇺🇸 USA (Housecall)",
     "🛠️ Plumbing WF CRM",
     "Sparky WF CRM",
@@ -1231,6 +1302,21 @@ with tab2:
             st.warning("Please upload a CSV file first.")
         else:
             url = run_usa_workflow_crm(csv_file_2)
+            if url:
+                st.success("Report generated successfully!")
+                st.markdown(f"### [📄 Open Google Sheet]({url})")
+
+# ── Tab: Australia WF CRM ────────────────────
+with tab_au:
+    st.subheader("Australia WF CRM")
+    st.caption("Australia WF CRM — upload CSV export; jobs on the GOOD REVIEWS 'Australia' tab appear in dark red")
+    csv_file_au = st.file_uploader("Upload CSV file", type=["csv"], key="australia_workflow_csv")
+
+    if st.button("🚀 RUN", type="primary", use_container_width=True, key="btn_australia_workflow"):
+        if csv_file_au is None:
+            st.warning("Please upload a CSV file first.")
+        else:
+            url = run_australia_workflow_crm(csv_file_au)
             if url:
                 st.success("Report generated successfully!")
                 st.markdown(f"### [📄 Open Google Sheet]({url})")
@@ -1297,4 +1383,4 @@ with tab6:
 
 # ── Footer ────────────────────────────────────
 st.divider()
-st.caption("Report Automation v3.1")
+st.caption("Report Automation v3.2")
