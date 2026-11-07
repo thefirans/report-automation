@@ -315,9 +315,10 @@ def load_sparky_review_job_keys(client, status=None):
 
 def run_appliance_workflow_crm(csv_file):
     """
-    Original Ontario/Alberta pipeline — same logic as before.
-    Reads Appliance Workflow CRM CSV, filters, matches invoices against
-    🟢GOOD REVIEWS sheet, colors yellow/orange, uploads to Google Sheets.
+    Original Ontario/Alberta pipeline.
+    Reads Appliance Workflow CRM CSV, filters, matches jobs against
+    🟢GOOD REVIEWS sheet by invoice ID + client name (invoice IDs overlap
+    with the USA/Australia WF CRMs), colors yellow/orange, uploads to Google Sheets.
     """
 
     status = st.status("Running Appliance WF CRM report…", expanded=True)
@@ -360,30 +361,12 @@ def run_appliance_workflow_crm(csv_file):
         return None
     progress.progress(40)
 
-    # ── 5. Fetch review invoices ─────────────────
-    status.write("📋 Loading review invoices…")
+    # ── 5. Fetch review jobs (invoice ID + client name) ──
+    status.write("📋 Loading review jobs…")
     try:
-        reviews_sheet = client.open("🟢GOOD REVIEWS")
-        alex_invoices = {
-            normalize_invoice_number(x)
-            for x in reviews_sheet.worksheet("Oleksandr Leoshko").col_values(3)
-            if normalize_invoice_number(x)
-        }
-        eugene_invoices = {
-            normalize_invoice_number(x)
-            for x in reviews_sheet.worksheet("Eugene Yuskov").col_values(3)
-            if normalize_invoice_number(x)
-        }
-        removal_invoices = set()
-        for tab_name, col_index in [("Zakaria", 2), ("Dio", 3), ("Jacob", 3), ("Artem", 3), ("Gleb", 3)]:
-            try:
-                removal_invoices.update(
-                    normalize_invoice_number(x)
-                    for x in reviews_sheet.worksheet(tab_name).col_values(col_index)
-                    if normalize_invoice_number(x)
-                )
-            except gspread.exceptions.WorksheetNotFound:
-                status.write(f"   ⚠️ Tab '{tab_name}' not found — skipping")
+        yellow_jobs, orange_jobs, removal_jobs = load_workflow_review_job_keys(
+            client, status
+        )
     except Exception as e:
         st.error(f"❌ Could not read GOOD REVIEWS sheet: {e}")
         return None
@@ -395,15 +378,15 @@ def run_appliance_workflow_crm(csv_file):
     removed_rows = 0
 
     for _, row in df.iterrows():
-        inv = normalize_invoice_number(row["Invoice ID"])
+        job_key = workflow_job_key(row["Invoice ID"], row["Client"])
         outstanding = money_to_float(row["Outstanding Balance"])
 
-        if inv in removal_invoices:
+        if job_key in removal_jobs:
             removed_rows += 1
             continue
-        if inv in alex_invoices:
+        if job_key in yellow_jobs:
             yellow_rows.append(row)
-        elif inv in eugene_invoices:
+        elif job_key in orange_jobs:
             orange_rows.append(row)
         elif outstanding > 0:
             regular_due.append(row)
@@ -417,7 +400,7 @@ def run_appliance_workflow_crm(csv_file):
         ordered_df = pd.DataFrame(columns=df.columns)
     ordered_df = ordered_df.fillna("")
     if removed_rows:
-        status.write(f"   Removed {removed_rows} invoice(s) found on Zakaria/Dio/Jacob/Artem/Gleb tabs.")
+        status.write(f"   Removed {removed_rows} job(s) found on Zakaria/Dio/Jacob/Artem/Gleb tabs.")
     progress.progress(60)
 
     # ── 7. Create Google Sheet ───────────────────
